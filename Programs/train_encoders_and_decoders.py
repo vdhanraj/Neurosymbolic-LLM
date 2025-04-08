@@ -9,17 +9,18 @@ import random
 import math
 import argparse
 
-sys.path.append('/u4/vdhanraj/Neurosymbolic-LLM/llama/llama3/llama')
-sys.path.append('/u4/vdhanraj/Neurosymbolic-LLM/llama/llama3')
+#sys.path.append('/u4/vdhanraj/Neurosymbolic-LLM/llama/llama3/llama')
+#sys.path.append('/u4/vdhanraj/Neurosymbolic-LLM/llama/llama3')
+sys.path.insert(0, '/u4/vdhanraj/Neurosymbolic-LLM')
 
-import openai
-import requests
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+#import openai
+#import requests
+#from requests.adapters import HTTPAdapter
+#from requests.packages.urllib3.util.retry import Retry
 
-import time
-from pathlib import Path
-from typing import List, Optional, Tuple, TypedDict
+#import time
+#from pathlib import Path
+from typing import List
 
 import torch.nn.functional as F
 from fairscale.nn.model_parallel.initialize import (
@@ -28,10 +29,9 @@ from fairscale.nn.model_parallel.initialize import (
     model_parallel_is_initialized,
 )
 
-from llama.model import ModelArgs, Transformer
-from llama.tokenizer import ChatFormat, Dialog, Message, Tokenizer
 from llama.generation import sample_top_p
 from llama.EncoderNetworks import Encoder, Decoder, Encoder_Deep, Decoder_Deep
+from llama.vsa_engine import *
 
 from typing import List, Optional
 import fire
@@ -49,25 +49,30 @@ import wandb
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from llama.SP_engine import SemanticEngine
 import plotly.graph_objects as go
 
-from nengo.dists import UniformHypersphere
+#from nengo.dists import UniformHypersphere
+from pathlib import Path
 
 import datetime
 
 parser = argparse.ArgumentParser(description="Train Encoders and Decoders")
 
 # Define arguments
-parser.add_argument("--chpt_dir", type="str", required=False, help="Model Checkpoint Directory", default="~/.llama/checkpoints/Llama3.1-8B-Instruct")
-parser.add_argument("--tokenizer_path", type="str", required=False, help="Tokenizer Checkpoint Directory", default="~/.llama/checkpoints/Llama3.1-8B-Instruct/tokenizer.model")
-parser.add_argument("--generate_data", type=bool, required=True, help="Whether to generate training data for encoder or to train encoder and decoder", default=False)
+parser.add_argument("--curr_dir", type=str, required=False, help="Directory of Program", default="~/Neurosymbolic-LLM/Programs")
+parser.add_argument("--chpt_dir", type=str, required=False, help="Model Checkpoint Directory", default="~/.llama/checkpoints/Llama3.1-8B-Instruct")
+parser.add_argument("--tokenizer_path", type=str, required=False, help="Tokenizer Checkpoint Directory", default="~/.llama/checkpoints/Llama3.1-8B-Instruct/tokenizer.model")
+parser.add_argument("--generate_data", type=bool, required=False, help="Whether to generate training data for encoder or to train encoder and decoder", default=False)
 
 args = parser.parse_args()
 
-ckpt_dir       = args.chpt_dir
-tokenizer_path = args.tokenizer_path
-generate_data  = args.generate_data
+curr_dir       = str(Path(args.curr_dir).expanduser())
+ckpt_dir       = str(Path(args.chpt_dir).expanduser())
+tokenizer_path = str(Path(args.tokenizer_path).expanduser())
+# If true, load the LLM and generate the data used to train the encoder
+# If false, don't put LLM into memory and train encoder instead
+generate_data  = bool(args.generate_data)
+
 
 curr_date = datetime.datetime.now().strftime("%Y%m%d")
 
@@ -83,6 +88,7 @@ else:
         name    = f"{curr_date}",
     )
 
+#print("ckpt_dir:", ckpt_dir, "tokenizer_path:", tokenizer_path, "generate_data:", generate_data)
 
 max_seq_len = 10000
 max_batch_size = 2
@@ -95,10 +101,6 @@ max_gen_len = None
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(torch.cuda.get_device_name(torch.cuda.current_device()))
 
-### SET THIS VARIABLE AT THE START OF THE NOTEBOOK
-# If true, load the LLM and generate the data used to train the encoder
-# If false, don't put LLM into memory and train encoder instead
-generate_data = False
 
 
 if generate_data:
@@ -205,81 +207,6 @@ if generate_data:
         return h_stacks, list_of_probs, out_tokens
 
 
-def make_unitary(v):
-    """
-    Makes input unitary (Fourier components have magnitude of 1)
-    """
-    fv = np.fft.fft(v, axis=1)
-    fv = fv/np.sqrt(fv.real**2 + fv.imag**2)
-    return np.fft.ifft(fv, axis=1).real  
-
-def make_tensor_unitary(v):
-    """
-    Makes input tensor unitary (Fourier components have magnitude of 1)
-    """
-    fv = torch.fft.fft(v, axis=1)
-    fv = fv/torch.sqrt(fv.real**2 + fv.imag**2)
-    return torch.fft.ifft(fv, axis=1).real
-
-def invert(a, dim):
-    """
-    Inverts input under binding
-    """
-    return a[:,-torch.arange(dim)]
-
-def identity(dim):
-    """
-    Returns
-    -------
-    np.array
-        dim-D identity vector under binding
-    """
-    s = torch.zeros((1, dim), dtype=torch.float32)
-    s[0][0] = 1
-    return s
-
-def null(shape):
-    """
-    Returns
-    -------
-    np.array
-        dim-D null vector under binding
-    """
-    s = torch.zeros(shape, dtype=torch.float32)
-    return s
-
-def bind(a, b):
-    """
-    Binds together input using torch tensors.
-
-    Parameters
-    ----------
-    a : torch.Tensor
-        A tensor with shape (n_samples x ssp_dim)
-
-    b : torch.Tensor
-        A tensor with shape (n_samples x ssp_dim)
-
-    Returns
-    -------
-    torch.Tensor
-        A tensor with shape (n_samples x ssp_dim). Row i is a[i,:] bound with b[i,:]
-    """
-    ## Ensure the inputs are at least 2D (this behavior mimics np.atleast_2d)
-    a = a.unsqueeze(0) if a.dim() == 1 else a
-    b = b.unsqueeze(0) if b.dim() == 1 else b
-    
-    # Compute the FFT of both inputs along the last dimension
-    fft_a = torch.fft.fft(a, dim=1)
-    fft_b = torch.fft.fft(b, dim=1)
-
-    # Multiply the FFTs element-wise
-    fft_product = fft_a * fft_b
-
-    # Perform the inverse FFT and take the real part of the result
-    bound = torch.fft.ifft(fft_product, dim=1).real
-
-    return bound
 
 max_digits = 10 #15 # maximum representable number is 10**max_digits
 SP_dim = 2048
@@ -294,22 +221,24 @@ SP_digit = 3 + len(possible_problems)
 
 domain_size = 4 + len(possible_problems)
 
+if not os.path.exists(f"{curr_dir}/SP_library"):
+    os.mkdir(f"{curr_dir}/SP_library")
 
 
-if os.path.exists(f"SP_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt"):
-    vectors         = torch.load(f"SP_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt")
-    inverse_vectors = torch.load(f"SP_inverse_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt")
+if os.path.exists(f"{curr_dir}/SP_library/SP_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt"):
+    vectors         = torch.load(f"{curr_dir}/SP_library/SP_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt")
+    inverse_vectors = torch.load(f"{curr_dir}/SP_library/SP_inverse_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt")
 else:
     torch.random.seed = 4
-    vectors = torch.tensor(make_unitary(UniformHypersphere(surface=True).sample(domain_size,SP_dim)), dtype=torch.float32).cuda()
+    vectors = torch.tensor(make_unitary(SampleUniformHypersphere(surface=True, n=domain_size, d=SP_dim)), dtype=torch.float32).cuda()
     for j in range(domain_size):
         q = vectors[j,:]/torch.linalg.norm(vectors[j,:])
         for k in range(j+1,domain_size):
             vectors[k,:] = vectors[k,:] - (q.T @ vectors[k,:]) * q
     vectors = make_tensor_unitary(vectors)
     inverse_vectors = invert(vectors, SP_dim).cuda()
-    torch.save(vectors, f"SP_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt")
-    torch.save(inverse_vectors, f"SP_inverse_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt")
+    torch.save(vectors, f"{curr_dir}/SP_library/SP_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt")
+    torch.save(inverse_vectors, f"{curr_dir}/SP_library/SP_inverse_vector_library_SPdim_{SP_dim}_domainSize_{domain_size}.pt")
 
 digits = {"SP_" + str(10**(i-3-len(possible_problems))): i for i in range(3+len(possible_problems), 3+len(possible_problems)+max_digits)}
 
@@ -672,6 +601,8 @@ def digit_error(predictions, labels, error_per_digit=False, verbose=0):
                 if error_per_digit:
                     digit_errors[n] += 1
             n += 1
+            if n == (complexity + 1):
+                break
 
         # Append the error for this pair
         errors.append(incorrect_count)
@@ -691,57 +622,57 @@ class Encoder(nn.Module):
     def forward(self, x):
         out = self.encoder_layer(x)
         return out
-class Decoder(nn.Module):
-    def __init__(self, layer_id, input_dim, output_dim, bias=False, dtype=torch.bfloat16):
-        super().__init__()
-        self.decoder_layer = nn.Linear(input_dim, output_dim, bias=bias, dtype=dtype)
-        self.layer_id = layer_id
 
-    def forward(self, x):
-        out = self.decoder_layer(x)
-        return out
+# class Decoder(nn.Module):
+#     def __init__(self, layer_id, input_dim, output_dim, bias=False, dtype=torch.bfloat16):
+#         super().__init__()
+#         self.decoder_layer = nn.Linear(input_dim, output_dim, bias=bias, dtype=dtype)
+#         self.layer_id = layer_id
 
-class Encoder_Deep(nn.Module):
-    def __init__(self, layer_id, input_dim, output_dim, hidden_dim, bias=False, dtype=torch.bfloat16):
-        super().__init__()
-        self.encoder_layer_1 = nn.Linear(input_dim,  hidden_dim, bias=bias, dtype=dtype)
-        self.encoder_layer_2 = nn.Linear(hidden_dim, output_dim, bias=bias, dtype=dtype)
-        self.activation = nn.ReLU()
-        self.layer_id = layer_id
+#     def forward(self, x):
+#         out = self.decoder_layer(x)
+#         return out
 
-    def forward(self, x):
-        x   = self.activation(self.encoder_layer_1(x))
-        out = self.encoder_layer_2(x)
-        return out
+# class Encoder_Deep(nn.Module):
+#     def __init__(self, layer_id, input_dim, output_dim, hidden_dim, bias=False, dtype=torch.bfloat16):
+#         super().__init__()
+#         self.encoder_layer_1 = nn.Linear(input_dim,  hidden_dim, bias=bias, dtype=dtype)
+#         self.encoder_layer_2 = nn.Linear(hidden_dim, output_dim, bias=bias, dtype=dtype)
+#         self.activation = nn.ReLU()
+#         self.layer_id = layer_id
 
-class Decoder_Deep(nn.Module):
-    def __init__(self, layer_id, input_dim, output_dim, hidden_dim, bias=False, dtype=torch.bfloat16):
-        super().__init__()
-        self.decoder_layer_1 = nn.Linear(input_dim,  hidden_dim, bias=bias, dtype=dtype)
-        self.decoder_layer_2 = nn.Linear(hidden_dim, output_dim, bias=bias, dtype=dtype)
-        self.activation = nn.ReLU()
-        self.layer_id = layer_id
+#     def forward(self, x):
+#         x   = self.activation(self.encoder_layer_1(x))
+#         out = self.encoder_layer_2(x)
+#         return out
+# class Decoder_Deep(nn.Module):
+#     def __init__(self, layer_id, input_dim, output_dim, hidden_dim, bias=False, dtype=torch.bfloat16):
+#         super().__init__()
+#         self.decoder_layer_1 = nn.Linear(input_dim,  hidden_dim, bias=bias, dtype=dtype)
+#         self.decoder_layer_2 = nn.Linear(hidden_dim, output_dim, bias=bias, dtype=dtype)
+#         self.activation = nn.ReLU()
+#         self.layer_id = layer_id
 
-    def forward(self, x):
-        x   = self.activation(self.decoder_layer_1(x))
-        out = self.decoder_layer_2(x)
-        return out
+#     def forward(self, x):
+#         x   = self.activation(self.decoder_layer_1(x))
+#         out = self.decoder_layer_2(x)
+#         return out
 
-class EncoderDataset(Dataset):
-    def __init__(self, data, labels, transform=None):
-        self.data = data
-        self.labels = labels
-        self.transform = transform
+# class EncoderDataset(Dataset):
+#     def __init__(self, data, labels, transform=None):
+#         self.data = data
+#         self.labels = labels
+#         self.transform = transform
 
-    def __len__(self):
-        return len(self.data)
+#     def __len__(self):
+#         return len(self.data)
 
-    def __getitem__(self, idx):
-        sample = self.data[idx]
-        label = self.labels[idx]
-        if self.transform:
-            sample = self.transform(sample)
-        return sample, label
+#     def __getitem__(self, idx):
+#         sample = self.data[idx]
+#         label = self.labels[idx]
+#         if self.transform:
+#             sample = self.transform(sample)
+#         return sample, label
 
 def gather_h_stacks(dialog_data):
     #response_data = []
@@ -788,7 +719,7 @@ save_frequency = 20
 
 layer_numbers = torch.arange(0, 33)
 #layer_numbers = torch.arange(12, 24)
-complexity  = 2 #10 # Complexity of problems to ask, represented by number of digits + 1 (of x and y)
+complexity  = 3 #10 # Complexity of problems to ask, represented by number of digits + 1 (of x and y)
 n_samples   = max_batch_size # should be less or equal to  than params.max_batch_size
 
 problem_type = ["multiplication",  "modulo", "gcd", "lcm", "square_mod", "bitwise_and", "bitwise_xor", "bitwise_or"]
@@ -798,7 +729,7 @@ if type(problem_type) == type([]):
 else:
     problem_str = problem_type
 
-tokens_to_keep = "all" # 1
+tokens_to_keep = 'all'
 calculate_end_index = False
 
 save_dir = f"gathered_data_{complexity}_complexity_{tokens_to_keep}_tokens_kept_{calculate_end_index}_cei_{train_data_rounds}_train_rounds_{test_data_rounds}_test_rounds_{problem_str}"
@@ -886,19 +817,6 @@ def generate_and_save_data(rounds, train, save_frequency, self, complexity, n_sa
         # shape of h_stacks[-1] is batch, num_tokens, hiddem_dim, n_layers. len of it is number of runs
         numbers += correct_sps
 
-
-if generate_data:
-    generate_and_save_data(rounds=train_data_rounds, train=True,  save_frequency=save_frequency, self=self, 
-                           complexity=complexity, n_samples=n_samples, problem_type=problem_type,
-                           tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
-    print("Training data gathering completed and saved to disk.")
-
-    generate_and_save_data(rounds=test_data_rounds,  train=False, save_frequency=save_frequency, self=self, 
-                           complexity=complexity, n_samples=n_samples, problem_type=problem_type,
-                           tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
-    print("Testing data gathering completed and saved to disk.")
-
-
 def generate_data_loaders(train, save_dir, data_rounds, save_frequency, layer_numbers, restrict_dataset=None, 
                           tokens_to_keep=1, batch_size=512, verbose=False):
     if train:
@@ -965,7 +883,19 @@ def generate_data_loaders(train, save_dir, data_rounds, save_frequency, layer_nu
     return encoder_data_loaders
 
 
-if not generate_data:
+if generate_data:
+    generate_and_save_data(rounds=train_data_rounds, train=True,  save_frequency=save_frequency, self=self, 
+                           complexity=complexity, n_samples=n_samples, problem_type=problem_type,
+                           tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
+    print("Training data gathering completed and saved to disk.")
+
+    generate_and_save_data(rounds=test_data_rounds,  train=False, save_frequency=save_frequency, self=self, 
+                           complexity=complexity, n_samples=n_samples, problem_type=problem_type,
+                           tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
+    print("Testing data gathering completed and saved to disk.")
+    wandb.finish()
+
+else:
     encoder_data_loaders = generate_data_loaders(train=True, save_dir=save_dir, data_rounds=train_data_rounds, 
                                                  save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=1000, 
                                                  tokens_to_keep=tokens_to_keep, batch_size=encoder_training_batch_size, verbose=True)
@@ -975,457 +905,460 @@ if not generate_data:
                                                          tokens_to_keep=tokens_to_keep, batch_size=encoder_training_batch_size, verbose=True)
     print("Testing data loaders for each layer have been created.")
 
-class LastTokenTransformer(nn.Module):
-    def __init__(self, layer_id, data_dim, output_dim, num_layers=4,
-                 num_heads=8, hidden_dim=512, dropout=0.1, dtype=torch.bfloat16):
-        """
-        Transformer model that processes LLM hidden states and outputs a semantic vector.
+    class LastTokenTransformer(nn.Module):
+        def __init__(self, layer_id, data_dim, output_dim, num_layers=4,
+                    num_heads=8, hidden_dim=512, dropout=0.1, dtype=torch.bfloat16):
+            """
+            Transformer model that processes LLM hidden states and outputs a semantic vector.
 
-        Args:
-            data_dim (int): Dimension of the input hidden states.
-            output_dim (int): Dimension of the final semantic output.
-            num_layers (int): Number of transformer encoder layers.
-            num_heads (int): Number of attention heads.
-            hidden_dim (int): Size of the feedforward hidden layer.
-            dropout (float): Dropout rate.
-        """
-        super().__init__()
+            Args:
+                data_dim (int): Dimension of the input hidden states.
+                output_dim (int): Dimension of the final semantic output.
+                num_layers (int): Number of transformer encoder layers.
+                num_heads (int): Number of attention heads.
+                hidden_dim (int): Size of the feedforward hidden layer.
+                dropout (float): Dropout rate.
+            """
+            super().__init__()
 
-        self.layer_id = layer_id
-        self.data_dim = data_dim
-        self.output_dim = output_dim
+            self.layer_id = layer_id
+            self.data_dim = data_dim
+            self.output_dim = output_dim
 
-        # Input projection layer (embedding input into model hidden size)
-        self.input_proj = nn.Linear(data_dim, hidden_dim, dtype=dtype)
+            # Input projection layer (embedding input into model hidden size)
+            self.input_proj = nn.Linear(data_dim, hidden_dim, dtype=dtype)
 
-        # Transformer Encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=hidden_dim * 4,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            dtype=dtype
-        )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+            # Transformer Encoder
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=hidden_dim,
+                nhead=num_heads,
+                dim_feedforward=hidden_dim * 4,
+                dropout=dropout,
+                activation="gelu",
+                batch_first=True,
+                dtype=dtype
+            )
+            self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        # Output projection layer
-        self.output_proj = nn.Linear(hidden_dim, output_dim, dtype=dtype)
+            # Output projection layer
+            self.output_proj = nn.Linear(hidden_dim, output_dim, dtype=dtype)
 
-    def forward(self, x):
-        """
-        Args:
-            x (Tensor): Input tensor of shape (batch, sequence_number, data_dim)
+        def forward(self, x):
+            """
+            Args:
+                x (Tensor): Input tensor of shape (batch, sequence_number, data_dim)
 
-        Returns:
-            Tensor: Output tensor of shape (batch, output_dim)
-        """
-        batch_size, seq_len, _ = x.shape
+            Returns:
+                Tensor: Output tensor of shape (batch, output_dim)
+            """
+            batch_size, seq_len, _ = x.shape
 
-        # Project input to hidden dimension
-        x = self.input_proj(x)  # Shape: (batch, seq_len, hidden_dim)
+            # Project input to hidden dimension
+            x = self.input_proj(x)  # Shape: (batch, seq_len, hidden_dim)
 
-        # Pass through transformer encoder
-        x = self.transformer_encoder(x)  # Shape: (batch, seq_len, hidden_dim)
+            # Pass through transformer encoder
+            x = self.transformer_encoder(x)  # Shape: (batch, seq_len, hidden_dim)
 
-        # Select the last token's hidden state
-        last_token = x[:, -1, :]  # Shape: (batch, hidden_dim)
+            # Select the last token's hidden state
+            last_token = x[:, -1, :]  # Shape: (batch, hidden_dim)
 
-        # Output projection
-        out = self.output_proj(last_token)  # Shape: (batch, output_dim)
+            # Output projection
+            out = self.output_proj(last_token)  # Shape: (batch, output_dim)
 
-        return out
+            return out
 
-encoders = torch.nn.ModuleList()
-for layer_id in layer_numbers:
-    if tokens_to_keep == 1:
-        #layer_encoder = Encoder_Deep(layer_id, model_dim, SP_dim, model_dim*4).to(device)
-        layer_encoder = Encoder(layer_id, model_dim, SP_dim, ).to(device)
-    else:
-        layer_encoder = LastTokenTransformer(layer_id, model_dim, SP_dim, num_layers=2, hidden_dim=512).to(device)
-    encoders.append(layer_encoder)#, dtype=torch.float32))
-
-def count_trainable_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-count_trainable_parameters(layer_encoder) # Per Layer
-
-optimizers   = [optim.Adam(encoders[n].parameters(), lr=learning_rate) for n in range(len(layer_numbers))]
-criterion = nn.MSELoss()
-losses = np.zeros((len(layer_numbers), training_epochs))
-running_losses = np.zeros((len(layer_numbers)))
-for i in range(training_epochs):
-    if i in learning_rate_reduction_factors.keys():
-        for param_group in optimizers[n].param_groups:
-            param_group['lr'] = param_group['lr'] * learning_rate_reduction_factors[i]  # Set new learning rate
-            print("Learning Rate changed to:", param_group['lr'])
-
-    if not i % 100:
-        print("Epoch:", i, "Running Loss:", running_losses.mean(), f"\tTotal gradient norm: {total_norm}")
-    for n, n_layer in enumerate(layer_numbers):
-        encoders[n].train()
-        running_loss = 0
-        total_norm = 0.0
-        for batch_idx, (data, labels) in enumerate(encoder_data_loaders[n]):
-            model_pred = encoders[n](data)
-            loss = torch.sqrt(criterion(model_pred, labels))
-            loss.backward()
-            tn = 0
-            for p in encoders[n].parameters():
-                if p.grad is not None:
-                    param_norm = p.grad.data.norm(2)
-                    tn += param_norm.item() ** 2
-            total_norm += tn ** 0.5
-            optimizers[n].step()
-            optimizers[n].zero_grad()
-            running_loss += loss.item()
-        running_loss /= (batch_idx + 1)
-        running_losses[n] = running_loss
-        total_norm   /= (batch_idx + 1)
-        losses[n][i] = running_loss
-
-
-#errors_per_pt = {layer_num.item() : {pt: [] for pt in possible_problems} for n, layer_num in enumerate(layer_numbers)}
-errors_per_pt = {pt: {layer_num.item(): [] for n, layer_num in enumerate(layer_numbers)} for pt in problem_type}
-
-SP_predictions = []
-label_SPs      = []
-rows_to_print  = 0
-verbose = 1 # 0, 1, 2
-errors = np.zeros(len(layer_numbers))
-lowest_error_layer = 0
-lowest_error       = complexity + 1
-lowest_pt_error    = np.inf
-calculate_digit_error = True # Measure total number of errors per digit
-per_digit_errors = np.zeros((len(layer_numbers), complexity+1))
-for n, layer in enumerate(layer_numbers):
-    row_count = 0
-    if verbose:
-        print("--------- Layer", layer.item(), "---------")
-    e = 0
-    for batch_idx, (data, labels) in enumerate(testing_encoder_data_loaders[n]):
-        row_count += len(data)
-        pred = encoders[n](data)
-        decoded_n1 = [sum([round(i, 0) * 10**n for n, i in enumerate(decode_digits(pred[i].  type_as(vectors[SP_n1]), SP_n1))]) for i in range(pred.  shape[0])]
-        decoded_n2 = [sum([round(i, 0) * 10**n for n, i in enumerate(decode_digits(pred[i].  type_as(vectors[SP_n2]), SP_n2))]) for i in range(pred.  shape[0])]
-        actual_n1  = [sum([round(i, 0) * 10**n for n, i in enumerate(decode_digits(labels[i].type_as(vectors[SP_n1]), SP_n1))]) for i in range(labels.shape[0])]
-        actual_n2  = [sum([round(i, 0) * 10**n for n, i in enumerate(decode_digits(labels[i].type_as(vectors[SP_n2]), SP_n2))]) for i in range(labels.shape[0])]
-        decoded_problem_types = decode_problem_type(pred)
-        actual_problem_types  = decode_problem_type(labels)
-        if calculate_digit_error:
-            n1_batch_error, n1_per_digit_error = digit_error(decoded_n1, actual_n1, error_per_digit=calculate_digit_error, verbose=verbose)
-            n2_batch_error, n2_per_digit_error = digit_error(decoded_n2, actual_n2, error_per_digit=calculate_digit_error, verbose=verbose)
-            batch_error = (n1_batch_error + n2_batch_error) / 2
-            per_digit_errors[layer.item()] += (n1_per_digit_error + n2_per_digit_error) / 2 * len(data) / (test_data_rounds * max_batch_size)
+    encoders = torch.nn.ModuleList()
+    for layer_id in layer_numbers:
+        if tokens_to_keep == 1:
+            #layer_encoder = Encoder_Deep(layer_id, model_dim, SP_dim, model_dim*4).to(device)
+            layer_encoder = Encoder(layer_id, model_dim, SP_dim, ).to(device)
         else:
-            batch_error = digit_error(decoded_n1, actual_n1, verbose=verbose) + digit_error(decoded_n2, actual_n2, verbose=verbose)
-        for k, curr_pt in enumerate(actual_problem_types):
-            errors_per_pt[curr_pt][layer.item()] += [batch_error[k]]
-        for r in range(rows_to_print):
-            print("Decoded symbolic encodings: first number:",  decoded_n1[r], "second number:", decoded_n2[r])
-            print("Actual           encodings: first number:",  actual_n1[r],  "second number:", actual_n2[r])
-            print("Decoded problem type:", decoded_problem_types[r])
-            print("Actual  problem type:", actual_problem_types[r])
-            #print(" --------- Error:", decoded_n1[r]-actual_n1[r], decoded_n2[r]-actual_n2[r], )
-        e += np.mean(digit_error(decoded_n1, actual_n1, verbose=verbose) + digit_error(decoded_n2, actual_n2, verbose=verbose)) / 2 * len(data) / (test_data_rounds * max_batch_size)
-    errors[n] = e
-    per_digit_errors[layer.item()] = per_digit_errors[layer.item()] / row_count
-    problem_type_error = (decoded_problem_types != actual_problem_types).sum()
-    if e < lowest_error:
-        lowest_error_layer = layer
-        lowest_error       = e
-        lowest_pt_error    = problem_type_error
+            layer_encoder = LastTokenTransformer(layer_id, model_dim, SP_dim, num_layers=2, hidden_dim=512).to(device)
+        encoders.append(layer_encoder)#, dtype=torch.float32))
 
-    print("Average Error:", np.mean(e), "digits out of", complexity+1)
-    print("Average Problem Type Error:", problem_type_error, "out of", len(labels))
-    # Divide per_digit_errors by row_count and by 2 in order to get per digit error
-    print("Average Error Rate per Digit:", per_digit_errors[layer.item()])
+    def count_trainable_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    count_trainable_parameters(layer_encoder) # Per Layer
 
-x_ticks = np.arange(layer_numbers[0].item(), layer_numbers[0].item() + len(layer_numbers), 1)  # Adjust the range as needed
-plt.plot(x_ticks, errors, marker=".")
-plt.xticks(x_ticks, rotation=75)
-plt.title("Error of Decoded Numbers (Testing Data)")
-plt.ylabel("Average Number of Incorrectly Decoded Digits")
-plt.xlabel("Layer Number")
-plt.grid(False)
-#plt.savefig("error_per_layer.png")
-wandb.log({f"Error of Decoded Numbers (Testing Data)": wandb.Image(plt)})  # Log to wandb
-plt.show()
+    optimizers   = [optim.Adam(encoders[n].parameters(), lr=learning_rate) for n in range(len(layer_numbers))]
+    criterion = nn.MSELoss()
+    losses = np.zeros((len(layer_numbers), training_epochs))
+    running_losses = np.zeros((len(layer_numbers)))
+    for i in range(training_epochs):
+        if i in learning_rate_reduction_factors.keys():
+            for param_group in optimizers[n].param_groups:
+                param_group['lr'] = param_group['lr'] * learning_rate_reduction_factors[i]  # Set new learning rate
+                print("Learning Rate changed to:", param_group['lr'])
 
-for pt in problem_type:
-    x_ticks = np.arange(layer_numbers[0].item(), layer_numbers[0].item() + len(layer_numbers), 1)  # Adjust the range as needed
-    pt_error = [np.mean(errors_per_pt[pt][ln]) for ln in errors_per_pt[pt]]
-    plt.plot(x_ticks, pt_error, marker=".")
-    plt.xticks(x_ticks, rotation=75)
-    #plt.show()
-#plt.title(f"Error of Decoded Numbers per Problem Type (Testing Data)")
-plt.ylabel("Mean Absolute Decoding Error")
-plt.xlabel("Layer Number")
-plt.legend(problem_type)
-plt.grid(False)
-#plt.savefig("per_pt_error_per_layer.png")
-wandb.log({f"Mean Absolute Decoding Error": wandb.Image(plt)})  # Log to wandb
-plt.show()
+        for n, n_layer in enumerate(layer_numbers):
+            encoders[n].train()
+            running_loss = 0
+            total_norm = 0.0
+            for batch_idx, (data, labels) in enumerate(encoder_data_loaders[n]):
+                model_pred = encoders[n](data)
+                loss = torch.sqrt(criterion(model_pred, labels))
+                loss.backward()
+                tn = 0
+                for p in encoders[n].parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        tn += param_norm.item() ** 2
+                total_norm += tn ** 0.5
+                optimizers[n].step()
+                optimizers[n].zero_grad()
+                running_loss += loss.item()
+            running_loss /= (batch_idx + 1)
+            running_losses[n] = running_loss
+            total_norm   /= (batch_idx + 1)
+            losses[n][i] = running_loss
+        if not i % 100:
+            print("Epoch:", i, "Running Loss:", running_losses.mean(), f"\tTotal gradient norm: {total_norm}")
 
-labels = ['Ones Digit Error Rate',
-          'Tens Digit Error Rate',
-          'Hundreds Digit Error Rate',
-          'Thousands Digit Error Rate',
-          'Ten Thousands Digit Error Rate',
-          'Hundred Thousands Digit Error Rate',
-          'Millions Digit Error Rate',
-          'Ten Millions Digit Error Rate',
-          'Hundred Millions Digit Error Rate',
-          ]
-markers = ["o", "s", "^", 
-           ".", "v", "*", 
-           "<", ">", "1"]
 
-for n, digit in enumerate(np.array(per_digit_errors).T):
-    plt.plot(layer_numbers, digit, label=labels[n], marker=markers[n])
+    #errors_per_pt = {layer_num.item() : {pt: [] for pt in possible_problems} for n, layer_num in enumerate(layer_numbers)}
+    errors_per_pt = {pt: {layer_num.item(): [] for n, layer_num in enumerate(layer_numbers)} for pt in problem_type}
 
-# # Plotting
-# #plt.figure(figsize=(12, 6))
-# plt.plot(layers, digit1, label='Hundreds Digit Error Rate', marker='o')
-# plt.plot(layers, digit2, label='Tens Digit Error Rate', marker='s')
-# plt.plot(layers, digit3, label='Ones Digit Error Rate', marker='^')
-
-# Adding labels, title, and legend
-plt.xlabel('Layer Number')
-plt.ylabel('Classification Error Rate')
-plt.title('Per Digit Loss Per Layers')
-plt.legend()
-plt.grid(True)
-#plt.savefig("per_digit_error_per_layer.png")
-wandb.log({f"Per Digit Loss Per Layers": wandb.Image(plt)})  # Log to wandb
-plt.show()
-
-print("Minimum Error:", lowest_error, "and problem type error:", problem_type_error, "at layer", lowest_error_layer.item(), ", Current running loss:", running_losses[lowest_error_layer.item()])
-
-SP_predictions = []
-label_SPs      = []
-max_rows = 100
-verbose = False
-train_errors = torch.zeros((len(layer_numbers), len(digits)))
-for n, layer in enumerate(layer_numbers):
-    encoders[n] = encoders[n].to(device).eval()
-
-with torch.no_grad():
+    SP_predictions = []
+    label_SPs      = []
+    rows_to_print  = 0
+    verbose = 1 # 0, 1, 2
+    errors = np.zeros(len(layer_numbers))
+    lowest_error_layer = 0
+    lowest_error       = complexity + 1
+    lowest_pt_error    = np.inf
+    calculate_digit_error = True # Measure total number of errors per digit
+    per_digit_errors = np.zeros((len(layer_numbers), complexity+1))
     for n, layer in enumerate(layer_numbers):
         row_count = 0
-        for batch_idx, (data, labels) in enumerate(encoder_data_loaders[n]):
-            pred = encoders[n](data)
-            SP_predictions += [pred]
-            label_SPs += [labels]
-            actual_digits_n1    = decode_digits_tensor(labels.to(torch.float32), SP_n1)
-            actual_digits_n2    = decode_digits_tensor(labels.to(torch.float32), SP_n2)
-            predicted_digits_n1 = decode_digits_tensor(pred.to(torch.float32), SP_n1)
-            predicted_digits_n2 = decode_digits_tensor(pred.to(torch.float32), SP_n2)
-            digit_errors = (actual_digits_n1-predicted_digits_n1).mean(axis=0)
-            #print(digit_errors.mean().cpu().item())
-            train_errors[n] += digit_errors.cpu() * len(data)
+        if verbose:
+            print("--------- Layer", layer.item(), "---------")
+        e = 0
+        for batch_idx, (data, labels) in enumerate(testing_encoder_data_loaders[n]):
             row_count += len(data)
-    train_errors[n] /= row_count
+            pred = encoders[n](data)
+            decoded_n1 = [sum([round(i, 0) * 10**n for n, i in enumerate(decode_digits(pred[i].  type_as(vectors[SP_n1]), SP_n1))]) for i in range(pred.  shape[0])]
+            decoded_n2 = [sum([round(i, 0) * 10**n for n, i in enumerate(decode_digits(pred[i].  type_as(vectors[SP_n2]), SP_n2))]) for i in range(pred.  shape[0])]
+            actual_n1  = [sum([round(i, 0) * 10**n for n, i in enumerate(decode_digits(labels[i].type_as(vectors[SP_n1]), SP_n1))]) for i in range(labels.shape[0])]
+            actual_n2  = [sum([round(i, 0) * 10**n for n, i in enumerate(decode_digits(labels[i].type_as(vectors[SP_n2]), SP_n2))]) for i in range(labels.shape[0])]
+            decoded_problem_types = decode_problem_type(pred)
+            actual_problem_types  = decode_problem_type(labels)
+            if calculate_digit_error:
+                n1_batch_error, n1_per_digit_error = digit_error(decoded_n1, actual_n1, error_per_digit=calculate_digit_error, verbose=verbose)
+                n2_batch_error, n2_per_digit_error = digit_error(decoded_n2, actual_n2, error_per_digit=calculate_digit_error, verbose=verbose)
+                batch_error = (n1_batch_error + n2_batch_error) / 2
+                per_digit_errors[layer.item()] += (n1_per_digit_error + n2_per_digit_error) / 2 * len(data) / (test_data_rounds * max_batch_size)
+            else:
+                batch_error = digit_error(decoded_n1, actual_n1, verbose=verbose) + digit_error(decoded_n2, actual_n2, verbose=verbose)
+            for k, curr_pt in enumerate(actual_problem_types):
+                errors_per_pt[curr_pt][layer.item()] += [batch_error[k]]
+            for r in range(rows_to_print):
+                print("Decoded symbolic encodings: first number:",  decoded_n1[r], "second number:", decoded_n2[r])
+                print("Actual           encodings: first number:",  actual_n1[r],  "second number:", actual_n2[r])
+                print("Decoded problem type:", decoded_problem_types[r])
+                print("Actual  problem type:", actual_problem_types[r])
+                #print(" --------- Error:", decoded_n1[r]-actual_n1[r], decoded_n2[r]-actual_n2[r], )
+            e += np.mean(digit_error(decoded_n1, actual_n1, verbose=verbose) + digit_error(decoded_n2, actual_n2, verbose=verbose)) / 2 * len(data) / (test_data_rounds * max_batch_size)
+        errors[n] = e
+        per_digit_errors[layer.item()] = per_digit_errors[layer.item()] / row_count
+        problem_type_error = (decoded_problem_types != actual_problem_types).sum()
+        if e < lowest_error:
+            lowest_error_layer = layer
+            lowest_error       = e
+            lowest_pt_error    = problem_type_error
 
-plt.plot(train_errors.mean(axis=1), marker=".")
-x_ticks = np.arange(0, len(layer_numbers), 1)  # Adjust the range as needed
-plt.xticks(x_ticks, rotation=75)
-plt.title("Error of Decoded Numbers (Training Data)")
-plt.ylabel("Mean Absolute Decoding Error")
-plt.xlabel("Layer Number")
-wandb.log({f"Error of Decoded Numbers (Training Data)": wandb.Image(plt)})  # Log to wandb
-plt.show()
+        print("Average Error:", np.mean(e), "digits out of", complexity+1)
+        print("Average Problem Type Error:", problem_type_error, "out of", len(labels))
+        # Divide per_digit_errors by row_count and by 2 in order to get per digit error
+        print("Average Error Rate per Digit:", per_digit_errors[layer.item()])
 
-for n, d in enumerate(digits):
-    plt.plot(train_errors[:,n], marker=".")
-    x_ticks = np.arange(0, len(layer_numbers), 1)  # Adjust the range as needed
+    x_ticks = np.arange(layer_numbers[0].item(), layer_numbers[0].item() + len(layer_numbers), 1)  # Adjust the range as needed
+    plt.plot(x_ticks, errors, marker=".")
     plt.xticks(x_ticks, rotation=75)
-    plt.title(f"Digit {n} Error of Decoded Numbers (Training Data)")
+    plt.title("Error of Decoded Numbers (Testing Data)")
+    plt.ylabel("Average Number of Incorrectly Decoded Digits")
+    plt.xlabel("Layer Number")
+    plt.grid(False)
+    #plt.savefig("error_per_layer.png")
+    wandb.log({f"Error of Decoded Numbers (Testing Data)": wandb.Image(plt)})  # Log to wandb
+    plt.close()
+
+    for pt in problem_type:
+        x_ticks = np.arange(layer_numbers[0].item(), layer_numbers[0].item() + len(layer_numbers), 1)  # Adjust the range as needed
+        pt_error = [np.mean(errors_per_pt[pt][ln]) for ln in errors_per_pt[pt]]
+        plt.plot(x_ticks, pt_error, marker=".")
+        plt.xticks(x_ticks, rotation=75)
+        #plt.close()
+    #plt.title(f"Error of Decoded Numbers per Problem Type (Testing Data)")
     plt.ylabel("Mean Absolute Decoding Error")
     plt.xlabel("Layer Number")
-    wandb.log({f"Digit {n} Error of Decoded Numbers (Training Data)": wandb.Image(plt)})  # Log to wandb
-    plt.show()
+    plt.legend(problem_type)
+    plt.grid(False)
+    #plt.savefig("per_pt_error_per_layer.png")
+    wandb.log({f"Mean Absolute Decoding Error": wandb.Image(plt)})  # Log to wandb
+    plt.close()
 
-SP_predictions = []
-label_SPs      = []
-max_rows = 100
-verbose = False
-test_errors = torch.zeros((len(layer_numbers), len(digits)))
-for n, layer in enumerate(layer_numbers):
-    encoders[n] = encoders[n].to(device).eval()
+    labels = ['Ones Digit Error Rate',
+            'Tens Digit Error Rate',
+            'Hundreds Digit Error Rate',
+            'Thousands Digit Error Rate',
+            'Ten Thousands Digit Error Rate',
+            'Hundred Thousands Digit Error Rate',
+            'Millions Digit Error Rate',
+            'Ten Millions Digit Error Rate',
+            'Hundred Millions Digit Error Rate',
+            ]
+    markers = ["o", "s", "^", 
+            ".", "v", "*", 
+            "<", ">", "1"]
 
-with torch.no_grad():
+    for n, digit in enumerate(np.array(per_digit_errors).T):
+        plt.plot(layer_numbers, digit, label=labels[n], marker=markers[n])
+
+    # # Plotting
+    # #plt.figure(figsize=(12, 6))
+    # plt.plot(layers, digit1, label='Hundreds Digit Error Rate', marker='o')
+    # plt.plot(layers, digit2, label='Tens Digit Error Rate', marker='s')
+    # plt.plot(layers, digit3, label='Ones Digit Error Rate', marker='^')
+
+    # Adding labels, title, and legend
+    plt.xlabel('Layer Number')
+    plt.ylabel('Classification Error Rate')
+    plt.title('Per Digit Loss Per Layers')
+    plt.legend()
+    plt.grid(True)
+    #plt.savefig("per_digit_error_per_layer.png")
+    wandb.log({f"Per Digit Loss Per Layers": wandb.Image(plt)})  # Log to wandb
+    plt.close()
+
+    print("Minimum Error:", lowest_error, "and problem type error:", problem_type_error, "at layer", lowest_error_layer.item(), ", Current running loss:", running_losses[lowest_error_layer.item()])
+
+    SP_predictions = []
+    label_SPs      = []
+    max_rows = 100
+    verbose = False
+    train_errors = torch.zeros((len(layer_numbers), len(digits)))
     for n, layer in enumerate(layer_numbers):
-        row_count = 0
-        for batch_idx, (data, labels) in enumerate(testing_encoder_data_loaders[n]):
-            pred = encoders[n](data)
-            SP_predictions += [pred]
-            label_SPs += [labels]
-            actual_digits_n1    = decode_digits_tensor(labels.to(torch.float32), SP_n1)
-            actual_digits_n2    = decode_digits_tensor(labels.to(torch.float32), SP_n2)
-            predicted_digits_n1 = decode_digits_tensor(pred.to(torch.float32), SP_n1)
-            predicted_digits_n2 = decode_digits_tensor(pred.to(torch.float32), SP_n2)
-            digit_errors = (actual_digits_n1-predicted_digits_n1).mean(axis=0)
-            #print(digit_errors.mean().cpu().item())
-            test_errors[n] += digit_errors.cpu() * len(data)
-            row_count += len(data)
-    test_errors[n] /= row_count
+        encoders[n] = encoders[n].to(device).eval()
 
-plt.plot(test_errors.mean(axis=1), marker=".")
-x_ticks = np.arange(0, len(layer_numbers), 1)  # Adjust the range as needed
-plt.xticks(x_ticks, rotation=75)
-plt.title("Error of Decoded Numbers (Testing Data)")
-plt.ylabel("Mean Absolute Decoding Error")
-plt.xlabel("Layer Number")
-wandb.log({f"Error of Decoded Numbers (Testing Data)": wandb.Image(plt)})  # Log to wandb
-plt.show()
+    with torch.no_grad():
+        for n, layer in enumerate(layer_numbers):
+            row_count = 0
+            for batch_idx, (data, labels) in enumerate(encoder_data_loaders[n]):
+                pred = encoders[n](data)
+                SP_predictions += [pred]
+                label_SPs += [labels]
+                actual_digits_n1    = decode_digits_tensor(labels.to(torch.float32), SP_n1)
+                actual_digits_n2    = decode_digits_tensor(labels.to(torch.float32), SP_n2)
+                predicted_digits_n1 = decode_digits_tensor(pred.to(torch.float32), SP_n1)
+                predicted_digits_n2 = decode_digits_tensor(pred.to(torch.float32), SP_n2)
+                digit_errors = (actual_digits_n1-predicted_digits_n1).mean(axis=0)
+                #print(digit_errors.mean().cpu().item())
+                train_errors[n] += digit_errors.cpu() * len(data)
+                row_count += len(data)
+        train_errors[n] /= row_count
 
-plt.plot(losses.T[:i].mean(axis=0)[:-1], marker=".")
-x_ticks = np.arange(0, len(losses.T.mean(axis=0)[:-1]), 1)  # Adjust the range as needed
-plt.xticks(x_ticks, rotation=75)
-plt.title("Average RMSE Loss vs Layer Number")
-plt.ylabel("Average RMSE Loss")
-plt.xlabel("Layer Number")
-wandb.log({f"Average RMSE Loss vs Layer Number": wandb.Image(plt)})  # Log to wandb
-plt.show()
+    plt.plot(train_errors.mean(axis=1), marker=".")
+    x_ticks = np.arange(0, len(layer_numbers), 1)  # Adjust the range as needed
+    plt.xticks(x_ticks, rotation=75)
+    plt.title("Error of Decoded Numbers (Training Data)")
+    plt.ylabel("Mean Absolute Decoding Error")
+    plt.xlabel("Layer Number")
+    wandb.log({f"Error of Decoded Numbers (Training Data)": wandb.Image(plt)})  # Log to wandb
+    plt.close()
 
-# training_start = 100
+    for n, d in enumerate(digits):
+        plt.plot(train_errors[:,n], marker=".")
+        x_ticks = np.arange(0, len(layer_numbers), 1)  # Adjust the range as needed
+        plt.xticks(x_ticks, rotation=75)
+        plt.title(f"Digit {n} Error of Decoded Numbers (Training Data)")
+        plt.ylabel("Mean Absolute Decoding Error")
+        plt.xlabel("Layer Number")
+        wandb.log({f"Digit {n} Error of Decoded Numbers (Training Data)": wandb.Image(plt)})  # Log to wandb
+        plt.close()
 
-# tensor = losses[:,training_start:i]
-# x = np.arange(tensor.shape[0])
-# y = np.arange(tensor.shape[1])
-# X, Y = np.meshgrid(x, y)
+    SP_predictions = []
+    label_SPs      = []
+    max_rows = 100
+    verbose = False
+    test_errors = torch.zeros((len(layer_numbers), len(digits)))
+    for n, layer in enumerate(layer_numbers):
+        encoders[n] = encoders[n].to(device).eval()
 
-# # Transpose the tensor to match the meshgrid dimensions
-# Z = tensor.T  # Shape becomes (2000, 32)
+    with torch.no_grad():
+        for n, layer in enumerate(layer_numbers):
+            row_count = 0
+            for batch_idx, (data, labels) in enumerate(testing_encoder_data_loaders[n]):
+                pred = encoders[n](data)
+                SP_predictions += [pred]
+                label_SPs += [labels]
+                actual_digits_n1    = decode_digits_tensor(labels.to(torch.float32), SP_n1)
+                actual_digits_n2    = decode_digits_tensor(labels.to(torch.float32), SP_n2)
+                predicted_digits_n1 = decode_digits_tensor(pred.to(torch.float32), SP_n1)
+                predicted_digits_n2 = decode_digits_tensor(pred.to(torch.float32), SP_n2)
+                digit_errors = (actual_digits_n1-predicted_digits_n1).mean(axis=0)
+                #print(digit_errors.mean().cpu().item())
+                test_errors[n] += digit_errors.cpu() * len(data)
+                row_count += len(data)
+        test_errors[n] /= row_count
 
-# # Create an interactive 3D surface plot
-# fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale='inferno')])
+    plt.plot(test_errors.mean(axis=1), marker=".")
+    x_ticks = np.arange(0, len(layer_numbers), 1)  # Adjust the range as needed
+    plt.xticks(x_ticks, rotation=75)
+    plt.title("Error of Decoded Numbers (Testing Data)")
+    plt.ylabel("Mean Absolute Decoding Error")
+    plt.xlabel("Layer Number")
+    wandb.log({f"Error of Decoded Numbers (Testing Data)": wandb.Image(plt)})  # Log to wandb
+    plt.close()
 
-# # Customize layout
-# fig.update_layout(
-#     title='Loss vs Layer Number and Training Epoch',
-#     scene=dict(
-#         xaxis_title='Layer Number',
-#         yaxis_title='Training Epoch',
-#         zaxis_title='Loss',
-#     ),
-# )
+    plt.plot(losses.T[:i].mean(axis=0)[:-1], marker=".")
+    x_ticks = np.arange(0, len(losses.T.mean(axis=0)[:-1]), 1)  # Adjust the range as needed
+    plt.xticks(x_ticks, rotation=75)
+    plt.title("Average RMSE Loss vs Layer Number")
+    plt.ylabel("Average RMSE Loss")
+    plt.xlabel("Layer Number")
+    wandb.log({f"Average RMSE Loss vs Layer Number": wandb.Image(plt)})  # Log to wandb
+    plt.close()
 
-# # Show the plot
-# fig.show()
+    # training_start = 100
 
-plt.plot(losses.T[:i+1][-1,:], marker=".")
-x_ticks = np.arange(0, len(losses.T.mean(axis=0)[:-1]), 1)  # Adjust the range as needed
-plt.xticks(x_ticks, rotation=75)
-plt.title("Final RMSE Loss vs Layer Number")
-plt.ylabel("Final RMSE Loss")
-plt.xlabel("Layer Number")
-wandb.log({f"Final RMSE Loss vs Layer Number": wandb.Image(plt)})  # Log to wandb
-plt.show()
+    # tensor = losses[:,training_start:i]
+    # x = np.arange(tensor.shape[0])
+    # y = np.arange(tensor.shape[1])
+    # X, Y = np.meshgrid(x, y)
+
+    # # Transpose the tensor to match the meshgrid dimensions
+    # Z = tensor.T  # Shape becomes (2000, 32)
+
+    # # Create an interactive 3D surface plot
+    # fig = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale='inferno')])
+
+    # # Customize layout
+    # fig.update_layout(
+    #     title='Loss vs Layer Number and Training Epoch',
+    #     scene=dict(
+    #         xaxis_title='Layer Number',
+    #         yaxis_title='Training Epoch',
+    #         zaxis_title='Loss',
+    #     ),
+    # )
+
+    # # Show the plot
+    # fig.show()
+
+    plt.plot(losses.T[:i+1][-1,:], marker=".")
+    x_ticks = np.arange(0, len(losses.T.mean(axis=0)[:-1]), 1)  # Adjust the range as needed
+    plt.xticks(x_ticks, rotation=75)
+    plt.title("Final RMSE Loss vs Layer Number")
+    plt.ylabel("Final RMSE Loss")
+    plt.xlabel("Layer Number")
+    wandb.log({f"Final RMSE Loss vs Layer Number": wandb.Image(plt)})  # Log to wandb
+    plt.close()
 
 
-plt.plot(losses.mean(axis=0)[:i], marker=".")
-plt.title("Average RMSE Loss Per Epoch")
-plt.ylabel("RMSE")
-plt.xlabel("Epoch")
-wandb.log({f"Average RMSE Loss Per Epoch": wandb.Image(plt)})  # Log to wandb
-plt.show()
+    plt.plot(losses.mean(axis=0)[:i], marker=".")
+    plt.title("Average RMSE Loss Per Epoch")
+    plt.ylabel("RMSE")
+    plt.xlabel("Epoch")
+    wandb.log({f"Average RMSE Loss Per Epoch": wandb.Image(plt)})  # Log to wandb
+    plt.close()
 
-####################################################################################################
+    ####################################################################################################
 
-for n, n_layer in enumerate(layer_numbers):
-    for param in encoders[n].parameters():
-        param.requires_grad = False
-
-
-
-decoders = torch.nn.ModuleList()
-for layer_id in layer_numbers:
-    #layer_decoder = Decoder_Deep(layer_id, SP_dim, model_dim, model_dim*2).to(device)
-    layer_decoder = Decoder(layer_id, SP_dim, model_dim).to(device)
-    decoders.append(layer_decoder)#, dtype=torch.float32))
-
-decoding_training_epochs = 10000
-decoding_learning_rate = 1e-3 # Base learning rate, modified by learning_rate_reduction_factors
-decoding_learning_rate_reduction_factors = {10: 0.1, 25:  0.5, 100: 0.5, 250: .4}
-
-decoding_optimizers   = [optim.Adam(decoders[n].parameters(), lr=decoding_learning_rate) for n in range(len(layer_numbers))]
-decoding_criterion = nn.MSELoss()
-decoding_losses = np.zeros((len(layer_numbers), decoding_training_epochs))
-decoding_running_losses = np.zeros((len(layer_numbers)))
-for j in range(decoding_training_epochs):
-    if j in decoding_learning_rate_reduction_factors.keys():
-        for param_group in decoding_optimizers[n].param_groups:
-            param_group['lr'] = param_group['lr'] * decoding_learning_rate_reduction_factors[j]  # Set new learning rate
-            print("Learning Rate changed to:", param_group['lr'])
-    if not j % 5 and j:
-        print("Epoch:", j, "Running Loss:", decoding_running_losses.mean(), f"\tTotal gradient norm: {total_norm}")
     for n, n_layer in enumerate(layer_numbers):
-        decoding_running_loss = 0
-        total_norm = 0.0
-        for batch_idx, (data, labels) in enumerate(encoder_data_loaders[n]):
-            latent_representation = encoders[n](data)
-            
-            #std = torch.exp(0.5 * latent_logvar)  # Compute standard deviation
-            #epsilon = torch.randn_like(std)      # Sample noise
-            #latent_representation = latent_representation + epsilon
-
-            predicted_hidden_state = decoders[n](latent_representation)
-            
-            if tokens_to_keep != 1:
-                target = data[:,-1,:]
-            else:
-                target = data
-
-            loss = torch.sqrt(criterion(predicted_hidden_state, target))
-            loss.backward()
-            tn = 0
-            for p in decoders[n].parameters():
-                if p.grad is not None:
-                    param_norm = p.grad.data.norm(2)
-                    tn += param_norm.item() ** 2
-            total_norm += tn ** 0.5
-            decoding_optimizers[n].step()
-            decoding_optimizers[n].zero_grad()
-            decoding_running_loss += loss.item()
-        decoding_running_loss /= (batch_idx + 1)
-        decoding_running_losses[n] = decoding_running_loss
-        total_norm   /= (batch_idx + 1)
-        decoding_losses[n][j] = decoding_running_loss
+        for param in encoders[n].parameters():
+            param.requires_grad = False
 
 
-plt.plot(decoding_losses.mean(axis=0)[:j], marker=".")
-plt.title("Average Decoder RMSE Loss Per Epoch")
-plt.ylabel("RMSE")
-plt.xlabel("Epoch")
-wandb.log({f"Average Decoder RMSE Loss Per Epoch": wandb.Image(plt)})  # Log to wandb
-plt.show()
 
-plt.plot(decoding_losses.T[:i].mean(axis=0)[:-1], marker=".")
-x_ticks = np.arange(0, len(decoding_losses.T.mean(axis=0)[:-1]), 1)  # Adjust the range as needed
-plt.xticks(x_ticks, rotation=75)
-plt.title("Average Decoder RMSE Loss vs Layer Number")
-plt.ylabel("Average RMSE Loss")
-plt.xlabel("Layer Number")
-wandb.log({f"Average Decoder RMSE Loss vs Layer Number": wandb.Image(plt)})  # Log to wandb
-plt.show()
+    decoders = torch.nn.ModuleList()
+    for layer_id in layer_numbers:
+        #layer_decoder = Decoder_Deep(layer_id, SP_dim, model_dim, model_dim*2).to(device)
+        layer_decoder = Decoder(layer_id, SP_dim, model_dim).to(device)
+        decoders.append(layer_decoder)#, dtype=torch.float32))
 
-plt.plot(decoding_losses.T[:j+1][-1,:], marker=".")
-x_ticks = np.arange(0, len(decoding_losses.T.mean(axis=0)[:-1]), 1)  # Adjust the range as needed
-plt.xticks(x_ticks, rotation=75)
-plt.title("Final Decoder RMSE Loss vs Layer Number")
-plt.ylabel("Final RMSE Loss")
-plt.xlabel("Layer Number")
-wandb.log({f"Final Decoder RMSE Loss vs Layer Number": wandb.Image(plt)})  # Log to wandb
-plt.show()
+    decoding_training_epochs = 10000
+    decoding_learning_rate = 1e-3 # Base learning rate, modified by learning_rate_reduction_factors
+    decoding_learning_rate_reduction_factors = {10: 0.1, 25:  0.5, 100: 0.5, 250: .4}
+
+    decoding_optimizers   = [optim.Adam(decoders[n].parameters(), lr=decoding_learning_rate) for n in range(len(layer_numbers))]
+    decoding_criterion = nn.MSELoss()
+    decoding_losses = np.zeros((len(layer_numbers), decoding_training_epochs))
+    decoding_running_losses = np.zeros((len(layer_numbers)))
+    for j in range(decoding_training_epochs):
+        if j in decoding_learning_rate_reduction_factors.keys():
+            for param_group in decoding_optimizers[n].param_groups:
+                param_group['lr'] = param_group['lr'] * decoding_learning_rate_reduction_factors[j]  # Set new learning rate
+                print("Learning Rate changed to:", param_group['lr'])
+        for n, n_layer in enumerate(layer_numbers):
+            decoding_running_loss = 0
+            total_norm = 0.0
+            for batch_idx, (data, labels) in enumerate(encoder_data_loaders[n]):
+                latent_representation = encoders[n](data)
+                
+                #std = torch.exp(0.5 * latent_logvar)  # Compute standard deviation
+                #epsilon = torch.randn_like(std)      # Sample noise
+                #latent_representation = latent_representation + epsilon
+
+                predicted_hidden_state = decoders[n](latent_representation)
+                
+                if tokens_to_keep != 1:
+                    target = data[:,-1,:]
+                else:
+                    target = data
+
+                loss = torch.sqrt(criterion(predicted_hidden_state, target))
+                loss.backward()
+                tn = 0
+                for p in decoders[n].parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        tn += param_norm.item() ** 2
+                total_norm += tn ** 0.5
+                decoding_optimizers[n].step()
+                decoding_optimizers[n].zero_grad()
+                decoding_running_loss += loss.item()
+            decoding_running_loss /= (batch_idx + 1)
+            decoding_running_losses[n] = decoding_running_loss
+            total_norm   /= (batch_idx + 1)
+            decoding_losses[n][j] = decoding_running_loss
+        if not j % 5 and j:
+            print("Epoch:", j, "Running Loss:", decoding_running_losses.mean(), f"\tTotal gradient norm: {total_norm}")
 
 
-if not os.path.exists("./models"):
-    os.mkdir("./models")
-torch.save(encoders.state_dict(), f"models/encoders_state_dict_{curr_date}.pth")
-torch.save(encoders,              f"models/encoders_{curr_date}.pth")
-print("Saved:", f"models/encoders_state_dict_{curr_date}.pth", "and", f"models/encoders_{curr_date}.pth")
-torch.save(decoders.state_dict(), f"models/decoders_state_dict_{curr_date}.pth")
-torch.save(decoders,              f"models/decoders_{curr_date}.pth")
-print("Saved:", f"models/decoders_state_dict_{curr_date}.pth", "and", f"models/decoders_{curr_date}.pth")
+    plt.plot(decoding_losses.mean(axis=0)[:j], marker=".")
+    plt.title("Average Decoder RMSE Loss Per Epoch")
+    plt.ylabel("RMSE")
+    plt.xlabel("Epoch")
+    wandb.log({f"Average Decoder RMSE Loss Per Epoch": wandb.Image(plt)})  # Log to wandb
+    plt.close()
+
+    plt.plot(decoding_losses.T[:i].mean(axis=0)[:-1], marker=".")
+    x_ticks = np.arange(0, len(decoding_losses.T.mean(axis=0)[:-1]), 1)  # Adjust the range as needed
+    plt.xticks(x_ticks, rotation=75)
+    plt.title("Average Decoder RMSE Loss vs Layer Number")
+    plt.ylabel("Average RMSE Loss")
+    plt.xlabel("Layer Number")
+    wandb.log({f"Average Decoder RMSE Loss vs Layer Number": wandb.Image(plt)})  # Log to wandb
+    plt.close()
+
+    plt.plot(decoding_losses.T[:j+1][-1,:], marker=".")
+    x_ticks = np.arange(0, len(decoding_losses.T.mean(axis=0)[:-1]), 1)  # Adjust the range as needed
+    plt.xticks(x_ticks, rotation=75)
+    plt.title("Final Decoder RMSE Loss vs Layer Number")
+    plt.ylabel("Final RMSE Loss")
+    plt.xlabel("Layer Number")
+    wandb.log({f"Final Decoder RMSE Loss vs Layer Number": wandb.Image(plt)})  # Log to wandb
+    plt.close()
+
+
+    if not os.path.exists("./models"):
+        os.mkdir("./models")
+    torch.save(encoders.state_dict(), f"models/encoders_state_dict_{curr_date}.pth")
+    torch.save(encoders,              f"models/encoders_{curr_date}.pth")
+    print("Saved:", f"models/encoders_state_dict_{curr_date}.pth", "and", f"models/encoders_{curr_date}.pth")
+    torch.save(decoders.state_dict(), f"models/decoders_state_dict_{curr_date}.pth")
+    torch.save(decoders,              f"models/decoders_{curr_date}.pth")
+    print("Saved:", f"models/decoders_state_dict_{curr_date}.pth", "and", f"models/decoders_{curr_date}.pth")
+
+
+    wandb.finish()
