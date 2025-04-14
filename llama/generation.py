@@ -87,7 +87,7 @@ class Llama:
             checkpoints
         ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
         ckpt_path = checkpoints[get_model_parallel_rank()]
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
 
@@ -99,12 +99,17 @@ class Llama:
         tokenizer = Tokenizer(model_path=tokenizer_path)
         assert model_args.vocab_size == tokenizer.n_words
         if torch.cuda.is_bf16_supported():
-            torch.set_default_tensor_type(torch.cuda.BFloat16Tensor)
+            torch.set_default_dtype(torch.bfloat16)
         else:
-            torch.set_default_tensor_type(torch.cuda.HalfTensor)
+            torch.set_default_dtype(torch.float16)
+
+        torch.set_default_device("cuda")
         model = Transformer(model_args)
+        model.model_args = model_args
         model.load_state_dict(checkpoint, strict=False)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
+
+        model.cuda()
 
         return Llama(model, tokenizer)
 

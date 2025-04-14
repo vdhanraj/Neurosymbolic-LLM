@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-from llama.EncoderNetworks import *
+from llama.encoder_decoder_networks import *
 
 def make_unitary(v):
     """
@@ -108,8 +108,9 @@ def SampleUniformHypersphere(surface, n, d, rng=torch, min_magnitude=1):
     return samples
 
 class SymbolicEngine():
-    def __init__(self, VSA_dim=4096, max_digits=15, curr_dir=".", similarity_threshold = 0.5, seed=4):
-        torch.random.seed = seed
+    def __init__(self, VSA_dim=4096, max_digits=15, possible_problems=["addition", "multiplication", "division", "modulo", "gcd", "lcm", "square_mod", "bitwise_and", "bitwise_xor", "bitwise_or"],
+                 curr_dir=".", similarity_threshold=0.5, seed=4):
+        torch.manual_seed(seed)
 
         self.VSA_dim = VSA_dim
 
@@ -121,8 +122,8 @@ class SymbolicEngine():
         self.VSA_n1 = 1
         self.VSA_n2 = 2
 
-        self.possible_problems = ["addition", "multiplication", "division", "modulo", "gcd", "lcm", "square_mod", "bitwise_and", "bitwise_xor", "bitwise_or"]
-        
+        self.possible_problems = possible_problems
+
         self.VSA_digit = 3 + len(self.possible_problems)
 
         self.domain_size = 4 + len(self.possible_problems)
@@ -132,23 +133,23 @@ class SymbolicEngine():
             print("Created VSA_library directory")
 
         if os.path.exists(f"{curr_dir}/VSA_library/VSA_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt"):
-            vectors         = torch.load(f"{curr_dir}/VSA_library/VSA_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt")
-            inverse_vectors = torch.load(f"{curr_dir}/VSA_library/VSA_inverse_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt")
+            self.vectors         = torch.load(f"{curr_dir}/VSA_library/VSA_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt", weights_only=True)
+            self.inverse_vectors = torch.load(f"{curr_dir}/VSA_library/VSA_inverse_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt", weights_only=True)
             print("Using existing VSAs:\n", 
                 f"{curr_dir}/VSA_library/VSA_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt\n",
                 f"{curr_dir}/VSA_library/VSA_inverse_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt"
                 )
         else:
             torch.random.seed = 4
-            vectors = torch.tensor(make_unitary(SampleUniformHypersphere(surface=True, n=self.domain_size, d=VSA_dim)), dtype=torch.float32).cuda()
+            self.vectors = make_unitary(SampleUniformHypersphere(surface=True, n=self.domain_size, d=VSA_dim)).to(torch.float32)
             for j in range(self.domain_size):
-                q = vectors[j,:]/torch.linalg.norm(vectors[j,:])
+                q = self.vectors[j,:]/torch.linalg.norm(self.vectors[j,:])
                 for k in range(j+1,self.domain_size):
-                    vectors[k,:] = vectors[k,:] - (q.T @ vectors[k,:]) * q
-            vectors = make_tensor_unitary(vectors)
-            inverse_vectors = invert(vectors, VSA_dim).cuda()
-            torch.save(vectors, f"{curr_dir}/VSA_library/VSA_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt")
-            torch.save(inverse_vectors, f"{curr_dir}/VSA_library/VSA_inverse_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt")
+                    self.vectors[k,:] = self.vectors[k,:] - (q @ self.vectors[k,:]) * q
+            self.vectors = make_tensor_unitary(self.vectors)
+            self.inverse_vectors = invert(self.vectors, VSA_dim)
+            torch.save(self.vectors, f"{curr_dir}/VSA_library/VSA_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt")
+            torch.save(self.inverse_vectors, f"{curr_dir}/VSA_library/VSA_inverse_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt")
             print("Saved VSAs:\n", 
                 f"{curr_dir}/VSA_library/VSA_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt\n",
                 f"{curr_dir}/VSA_library/VSA_inverse_vector_library_VSAdim_{VSA_dim}_domainSize_{self.domain_size}.pt"
@@ -160,7 +161,7 @@ class SymbolicEngine():
             "VSA_x":    self.vectors[[self.VSA_x]],
             "VSA_n1":   self.vectors[[self.VSA_n1]],
             "VSA_n2":   self.vectors[[self.VSA_n2]]}
-        
+
         for n, pt in enumerate(self.possible_problems):
             self.vocabulary[pt] = self.vectors[[len(self.vocabulary)]]
 
@@ -239,109 +240,115 @@ class SymbolicEngine():
         else:
             final_VSA = total_VSA1
 
-
         return final_VSA
 
-    def decode_VSA(self, VSA, VSA_n=None, similarity_threshold=0.5, T=0.01, exp_scalar=100, k=100):
+    def decode_VSA(self, VSA, VSA_n=None, differentiable=False, similarity_threshold=0.5, T=0.01, exp_scalar=100, k=100):
         if VSA_n:
             n = bind(VSA, self.inverse_vectors[VSA_n])
         else:
             n = VSA
 
+        # Bind the input VSA with each inverse VSA for each digit. Output is num_digits x VSA_dim
         query = bind(n, self.inverse_vectors[list(self.digits.values())])
 
+        # Bind the above query with the VSA for each number (size of this is batch x unique_numbers x VSA_dim)
+        # Output is batch x unique_numbers x num_digits (this indicates the vector similarity per digit of each number)
         vs = (torch.stack(list(self.numbers.values())).reshape(-1, len(self.numbers), self.VSA_dim) @ query.T)
+        batch_size = vs.shape[0]
 
-        digit_values = torch.softmax(vs/T, dim=1)
-        digit_scores = 1/exp_scalar*torch.log(torch.exp(vs*exp_scalar).sum(dim=1)) # LogSumExp
-        digit_scores = torch.sigmoid(k * (digit_scores - similarity_threshold))
-        modified_digit_values = digit_values * digit_scores.unsqueeze(1)
+        if differentiable:
+            digit_values = torch.softmax(vs/T, dim=1)
+            digit_scores = 1/exp_scalar*torch.log(torch.exp(vs*exp_scalar).sum(dim=1)) # LogSumExp
+            digit_scores = torch.sigmoid(k * (digit_scores - similarity_threshold))
+            modified_digit_values = digit_values * digit_scores.unsqueeze(1)
+            
+            exponents = torch.tensor([10**d for d in range(len(self.digits))], dtype=torch.float32)
+            nums = torch.arange(0, 10, dtype=torch.float32)
 
-        exponents = torch.tensor([10**d for d in range(len(self.digits))], dtype=torch.float32)
-        nums = torch.arange(0, 10, dtype=torch.float32)
+            # The i loop iterates over the different digits, and the j loop iterates over the different batch elements
+            decoded_VSAs = torch.stack([sum([(exponents[i] * torch.dot(nums.double(), modified_digit_values[j,:,i].double()))
+                                            for i in range(self.max_digits)])
+                                    for j in range(batch_size)]).to(VSA.device)
 
-        decoded_VSAs = torch.stack([sum([(exponents[i] * torch.dot(nums.double(), modified_digit_values[j,:,i].double()))
-                                        for i in range(digit_values.shape[2])])
-                                for j in range(digit_values.shape[0])]).to(VSA.device)
+        else:
+            modified_digit_values = []
+            for batch_item in range(vs.shape[0]):
+                digit_scores = vs[batch_item].max(axis=0).values
+                digit_values = vs[batch_item].max(axis=0).indices
+                modified_digit_value = []
+                for i in range(vs.shape[2]):
+                    if digit_scores[i] > similarity_threshold:
+                        modified_digit_value += [digit_values[i]]
+                    else:
+                        modified_digit_value += [0.]
+                modified_digit_value = torch.tensor(modified_digit_value)
+                modified_digit_values += [modified_digit_value]
+            modified_digit_values = torch.stack(modified_digit_values, dim=0).type(torch.float32)
+
+            exponents = torch.tensor([10**d for d in range(len(self.digits))], dtype=torch.float32)
+            nums = torch.arange(0, 10, dtype=torch.float32)
+
+            # The i loop iterates over the different digits, and the j loop iterates over the different batch elements
+            decoded_VSAs = torch.stack([sum([(exponents[i] * modified_digit_values[j,i])
+                                            for i in range(self.max_digits)])
+                                        for j in range(batch_size)]).to(VSA.device)
 
         return decoded_VSAs
 
-
-    def single_digit_addition_fourier(self, n1, n2, n3, sum_terms=500, epsilon=0.25):
-        n = n1 + n2 + n3 + epsilon
-
-        # Parameters
-        batch_size = n.size(0)
-        max_digit = 2 + 1
-        sum_terms = sum_terms + 1
-
-        # Prepare indices in a vectorized way
-        k_values = torch.arange(1, sum_terms, dtype=torch.float32).view(1, 1, -1)  # Shape (1, 1, sum_terms - 1)
-        d_values = torch.arange(max_digit, dtype=torch.float32).view(1, -1, 1)        # Shape (1, max_digit, 1)
-
-        # Reshape n for broadcasting across digits and sum terms
-        n = n.view(batch_size, 1, 1)  # Shape (batch, 1, 1)
-
-        # Calculate A in a fully vectorized way
-        A = torch.sin(2 * torch.pi * k_values * n / 10**d_values) / k_values  # Shape (batch, max_digit, sum_terms - 1)
-
-        # Summations with the computed A, applied across the batch
-        n_ones = 4.5 + (1 / torch.pi) * (A[:, 0, :] - 10 * A[:, 1, :]).sum(dim=1)
-        n_tens = torch.relu(4.5 + (1 / torch.pi) * (A[:, 1, :] - 10 * A[:, 2, :]).sum(dim=1))
-
-        return n_ones, n_tens
-
     # Make sure similarity_threshold is picked such that the correct number has a score greater than this threshold, and everything 
     #  else is smaller than the threshold
-    def query_digit(self, VSA, d, similarity_threshold=0.5, T=0.01, exp_scalar=100, k=100):
+    def query_digit(self, VSA, d, similarity_threshold=0.5, T=0.01, exp_scalar=100, k=100, differentiable=False):
+        # Bind the input VSA with each inverse VSA for each digit. Output is num_digits x VSA_dim
         query = bind(VSA, self.inverse_vectors[self.digits[d]])
 
-        vs = (torch.stack(list(self.numbers.values())).reshape(-1, len(self.numbers), self.VSA_dim) @ query.mT).mT.squeeze(-1)
+        # Bind the above query with the VSA for each number (size of this is batch x unique_numbers x VSA_dim)
+        # Output is batch x num_digits (this indicates the vector similarity per digit of each number)
+        vs = (torch.stack(list(self.numbers.values())).reshape(-1, len(self.numbers), self.VSA_dim) @ query.mT).mT.squeeze(0)
 
+        if differentiable:
+            digit_values = torch.softmax(vs/T, dim=1)
+            digit_scores = 1/exp_scalar*torch.log(torch.exp(vs*exp_scalar).sum(dim=1)+1) # LogSumExp
+            digit_scores = torch.sigmoid(k * (digit_scores - similarity_threshold))
+            modified_digit_values = digit_values * digit_scores.unsqueeze(1)
 
-        #print("LOGSUMEXP:", torch.exp(vs*exp_scalar).sum(dim=1))
-        digit_values = torch.softmax(vs/T, dim=1)
-        digit_scores = 1/exp_scalar*torch.log(torch.exp(vs*exp_scalar).sum(dim=1)+1) # LogSumExp
-        digit_scores = torch.sigmoid(k * (digit_scores - similarity_threshold))
-        modified_digit_values = digit_values * digit_scores.unsqueeze(1)
+            nums = torch.arange(0, 10, dtype=torch.float32)
+            queried_digit = (nums * modified_digit_values).sum(axis=-1)
+        else:
+            digit_scores = vs.max(axis=1).values
+            digit_values = vs.max(axis=1).indices
+            queried_digit = (digit_scores > similarity_threshold) * digit_values
 
-        nums = torch.arange(0, 10, dtype=torch.float32)
+        return queried_digit
 
-        return (nums * modified_digit_values).sum(axis=-1)
-
-    def fractional_encode(self, x):
-        return torch.fft.ifft((torch.fft.fft(self.vocabulary["VSA_x"])**x.view(-1, 1))).real
-
-    def add_VSA(self, VSA, similarity_threshold=0.5):
-        #print("VSA", VSA.shape)
-        #VSA = VSA / torch.sqrt(torch.sum(VSA ** 2))
-        n1 = bind(VSA, self.vocabulary_inverse["VSA_n1"])
-        n2 = bind(VSA, self.vocabulary_inverse["VSA_n2"])
-
-        n3 = null(VSA.shape)
-        r  = null((VSA.shape[0]))
-        for d in self.digits.keys():
-            digit_n1 = self.query_digit(n1, d, similarity_threshold=similarity_threshold)
-            digit_n2 = self.query_digit(n2, d, similarity_threshold=similarity_threshold)
-            #print("digit:", d, "digit1:", digit_n1.item(), "digit2:", digit_n2.item(), "remainder:", r.item(), "sum:", digit_n1.item() + digit_n2.item() + r.item())
-
-            digit_n3, r = self.single_digit_addition_fourier(digit_n1, digit_n2, r)
-            #print("post addition digits", digit_n3.item(), r.item())
-
-            n3 = n3 + bind(self.vocabulary[d], self.fractional_encode(digit_n3))
-            #print("n3", n3, "\n")
-        return n3
-
-    def decode_digits(self, VSA, n=0, verbose=False):
+    def decode_digits(self, VSA, n=0, verbose=False, differentiable=False):
         if n == 0: 
             n == self.VSA_n1
         decoded_values = []
         for d in self.digits.keys():
-            dv = (self.query_digit(bind(VSA, self.inverse_vectors[n].cuda()), d).item())
+            dv = (self.query_digit(bind(VSA, self.inverse_vectors[n].cuda()), d, differentiable=differentiable))
             if verbose:
                 print(d, '\t', round(dv, 3))
             decoded_values += [dv]
-        return np.array(decoded_values)
+        decoded_values = torch.stack(decoded_values).T 
+        return decoded_values
+
+    def digit_error(self, predictions, labels, error_per_digit=False, verbose=0):
+        # Expects predictions and labels to be torch tensors (of type int) to be the same length
+        if verbose == 2:
+            print("Predictions:")
+            print(predictions)
+            print("Labels:")
+            print(labels)
+
+        errors       = torch.zeros(len(predictions), dtype=int)
+        digit_errors = torch.zeros(self.max_digits,  dtype=int)
+        for i in range(self.max_digits):
+            digit_errors[i] = ((predictions % 10 ** (i + 1) // 10 ** i) != (labels % 10 ** (i + 1) // 10 ** i)).sum()
+            errors += (predictions % 10 ** (i + 1) // 10 ** i) != (labels % 10 ** (i + 1) // 10 ** i)
+        if error_per_digit:
+            return errors, digit_errors
+        else:
+            return errors
 
     def decode_problem_type(self, VSA, problem_subset=None, normalize_VSA_before_dot=False, verbose=False):
         # Compute the L2 norm along the second dimension (dim=1)
@@ -371,6 +378,55 @@ class SymbolicEngine():
         if verbose:
             print(problem_type_labels)
         return np.array(problem_type_labels), problem_type_maxima.values.cpu().numpy(), (problem_type_VSAs @ VSA_curr.T.float()).T.cpu().numpy()
+    
+    def fractional_encode(self, x):
+        return torch.fft.ifft((torch.fft.fft(self.vocabulary["VSA_x"])**x.view(-1, 1))).real
+
+    def single_digit_addition_fourier(self, n1, n2, n3, sum_terms=500, epsilon=0.25):
+        n = n1 + n2 + n3 + epsilon
+
+        # Parameters
+        batch_size = n.size(0)
+        max_digit = 2 + 1
+        sum_terms = sum_terms + 1
+
+        # Prepare indices in a vectorized way
+        k_values = torch.arange(1, sum_terms, dtype=torch.float32).view(1, 1, -1)  # Shape (1, 1, sum_terms - 1)
+        d_values = torch.arange(max_digit, dtype=torch.float32).view(1, -1, 1)        # Shape (1, max_digit, 1)
+
+        # Reshape n for broadcasting across digits and sum terms
+        n = n.view(batch_size, 1, 1)  # Shape (batch, 1, 1)
+
+        # Calculate A in a fully vectorized way
+        A = torch.sin(2 * torch.pi * k_values * n / 10**d_values) / k_values  # Shape (batch, max_digit, sum_terms - 1)
+
+        # Summations with the computed A, applied across the batch
+        n_ones = 4.5 + (1 / torch.pi) * (A[:, 0, :] - 10 * A[:, 1, :]).sum(dim=1)
+        n_tens = torch.relu(4.5 + (1 / torch.pi) * (A[:, 1, :] - 10 * A[:, 2, :]).sum(dim=1))
+
+        return n_ones, n_tens
+
+
+    # Method to add two numbers represented by a VSA (n1_tag * n1 + n2_tag * n2) in a differentiable way
+    def add_VSA(self, VSA, similarity_threshold=0.5):
+        #print("VSA", VSA.shape)
+        #VSA = VSA / torch.sqrt(torch.sum(VSA ** 2))
+        n1 = bind(VSA, self.vocabulary_inverse["VSA_n1"])
+        n2 = bind(VSA, self.vocabulary_inverse["VSA_n2"])
+
+        n3 = null(VSA.shape)
+        r  = null((VSA.shape[0]))
+        for d in self.digits.keys():
+            digit_n1 = self.query_digit(n1, d, similarity_threshold=similarity_threshold)
+            digit_n2 = self.query_digit(n2, d, similarity_threshold=similarity_threshold)
+            #print("digit:", d, "digit1:", digit_n1.item(), "digit2:", digit_n2.item(), "remainder:", r.item(), "sum:", digit_n1.item() + digit_n2.item() + r.item())
+
+            digit_n3, r = self.single_digit_addition_fourier(digit_n1, digit_n2, r)
+            #print("post addition digits", digit_n3.item(), r.item())
+
+            n3 = n3 + bind(self.vocabulary[d], self.fractional_encode(digit_n3))
+            #print("n3", n3, "\n")
+        return n3
 
     def generate_counter(self, n, batch_size):
         if n == 0:

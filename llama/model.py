@@ -16,7 +16,7 @@ from fairscale.nn.model_parallel.layers import (
 )
 from torch import nn
 
-from llama.sp_engine import SemanticEngine, bind
+from llama.vsa_engine import SymbolicEngine, bind
 
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader, RandomSampler
@@ -281,67 +281,9 @@ class Transformer(nn.Module):
             params.rope_theta,
         )
 
-        self.SP_dim = 2048
-        self.max_digits = 5
-        self.SE = SemanticEngine(SP_dim=self.SP_dim, max_digits=self.max_digits, seed=4)
-
-        # self.encoders = torch.load("/home/vdhanraj/llama/Programs/encoders_20241221.pth")
-        # #self.decoders = torch.load("/home/vdhanraj/llama/Programs/decoders_20241221_post_fine_tuning_2024_12_21-19.pth")
-        # self.decoders = torch.load("/home/vdhanraj/llama/Programs/decoders_20241221.pth")
-
-        # self.starting_encoder_layer = self.encoders[0].layer_id.item()
-        # self.starting_decoder_layer = self.decoders[0].layer_id.item()
-
-        # self.encoders.requires_grad = True
-        # self.decoders.requires_grad = True
-
-        # self.symbolic = RMSNorm(params.dim, eps=params.norm_eps)
-
-        #self.layer_numbers = torch.arange(0, 32)
-        #encoder_state_dict  = torch.load("/home/vdhanraj/llama/Programs/encoders_state_dict_20241205.pth")
-        #decoder_state_dict  = torch.load("/home/vdhanraj/llama/Programs/decoders_state_dict_20241205.pth")
-
-        #self.encoders = torch.nn.ModuleList()
-        #for layer_id in self.layer_numbers:
-        #    layer_encoder = Encoder(layer_id, params.dim, self.SP_dim)
-        #    layer_encoder.weight = encoder_state_dict[str(layer_id.item()) + ".encoder_layer.weight"]
-        #    self.encoders.append(layer_encoder)#, dtype=torch.float32))
-
-        #self.decoders = torch.nn.ModuleList()
-        #for layer_id in self.layer_numbers:
-        #    layer_decoder = Encoder(layer_id, self.SP_dim, params.dim)
-        #    layer_encoder.weight = decoder_state_dict[str(layer_id.item()) + ".decoder_layer.weight"]
-        #    self.decoders.append(layer_decoder)#, dtype=torch.float32))
-
-        # self.encoders.eval()
-        #self.decoders.eval()
-
-        ##self.encoders.load_state_dict("/home/vdhanraj/llama/Programs/encoders_state_dict_20241205.pth")
-        ##self.decoders.load_state_dict("/home/vdhanraj/llama/Programs/decoders_state_dict_20241205.pth")
-
-        ######################################################################################################
-
-        ##self.semantic_encoding = nn.Linear(in_features=params.dim, out_features=self.SP_dim, bias=False)
-        ##self.semantic_decoding = nn.Linear(in_features=self.SP_dim, out_features=params.dim, bias=False)
-        #self.semantic_encoding = nn.Linear(params.dim, self.SP_dim, bias=False, dtype=torch.bfloat16)
-        #self.semantic_decoding = nn.Linear(self.SP_dim, params.dim, bias=False, dtype=torch.bfloat16)
-           
-
-        #torch.nn.init.xavier_uniform_(self.semantic_encoding.weight)
-        #if self.semantic_encoding.bias is not None:
-        #    torch.nn.init.zeros_(self.semantic_encoding.bias)
-
-        #torch.nn.init.xavier_uniform_(self.semantic_decoding.weight)
-        #if self.semantic_decoding.bias is not None:
-        #    torch.nn.init.zeros_(self.semantic_decoding.bias)
-
-        self.tanh_layer     = torch.nn.Tanh()
-        self.softsign_layer = torch.nn.Softsign()
-
-
 
     @torch.inference_mode()
-    def forward(self, tokens: torch.Tensor, start_pos: int, skip_weight=None, symbolic_layer=16, skip_strength=0, problem_type="addition", add_noise=False, verbose=False):
+    def forward(self, tokens: torch.Tensor, start_pos: int, curr_token=0, verbose=False):
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
         self.freqs_cis = self.freqs_cis.to(h.device)
@@ -372,9 +314,7 @@ class Transformer(nn.Module):
         return output, h_stack, h
 
     #@torch.inference_mode()
-    def forward_symbolic_funnel(self, tokens: torch.Tensor, start_pos: int, symbolic_encoding_layer=16, symbolic_decoding_layers=[32], bypass_symbolic=False, 
-                                normalize_vector=False, problem_type="addition", add_noise=False, complexity=2, double_rep=True, rms_layer=False, curr_token=0, 
-                                verbose=False):
+    def forward_symbolic_funnel(self, tokens: torch.Tensor, start_pos: int, curr_token=0, verbose=False):
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
 
@@ -392,7 +332,7 @@ class Transformer(nn.Module):
 
         skip_index = 0 # Indicates which skip connection weight is being used (different ones for different layers if it's trainable)
         for n, layer in enumerate(self.layers):
-            if n == symbolic_encoding_layer  and (self.multi_token_intervention or curr_token == 0) and not bypass_symbolic and not add_noise:
+            if n == self.symbolic_encoding_layer  and (self.multi_token_intervention or curr_token == 0) and not self.bypass_symbolic and not self.add_noise:
                 if curr_token == 0:
                     appended_h = h
                     if self.encoder_input_tokens == 1:
@@ -415,12 +355,12 @@ class Transformer(nn.Module):
                 #print("AFTR", appended_h.shape, relevant_h.shape)
                 self.relevant_h = relevant_h # Save to recalculate relevant_h for next token
 
-                try:
-                    symbolic_encoding = self.encoders[n-self.starting_encoder_layer](relevant_h) # Pass the relevent_h through the symbolic encoder
-                except Exception as e:
-                    print(Exception, n, self.starting_encoder_layer, relevant_h.shape, curr_token, self.start_indices, self.end_indices)
-                    print(self.dialogs)
-                    0/0
+                #try:
+                symbolic_encoding = self.encoders[n-self.starting_encoder_layer](relevant_h) # Pass the relevent_h through the symbolic encoder
+                #except Exception as e:
+                #    print(Exception, n, self.starting_encoder_layer, relevant_h.shape, curr_token, self.start_indices, self.end_indices)
+                #    print(self.dialogs)
+                #    0/0
 
                 # If using lora baseline, simply set the output of the encoder to the input of the decoder without doing any symbolic computation
                 if self.lora_baseline:
@@ -431,49 +371,53 @@ class Transformer(nn.Module):
                                                  "lcm":      lambda x: x, "square_mod":     lambda x: x+1, "bitwise_and": lambda x: x,   "bitwise_xor": lambda x: 0, "bitwise_or": lambda x: 0}
 
                         #print(symbolic_encoding.shape)
-                        problem_type_decoded, problem_type_score, score_per_problem = self.SE.decode_problem_type(symbolic_encoding, problem_subset=self.training_problems, normalize_SP_before_dot=self.normalize_SP_before_dot)
+                        problem_type_decoded, problem_type_score, score_per_problem = self.SE.decode_problem_type(symbolic_encoding, problem_subset=self.training_problems, normalize_VSA_before_dot=self.normalize_VSA_before_dot)
                         score_per_problem = {self.training_problems[i]: score_per_problem[0][i] for i in range(len(score_per_problem[0]))} # Only print the first batch item
                         use_symbolic_layer = torch.tensor([bool(i > self.problem_score_threshold) for i in problem_type_score], device=h.device).view(-1, 1) 
                         if verbose == 2:
                             print("Decoded problem type, max score, score above threshold:", problem_type_decoded, problem_type_score, use_symbolic_layer, ", Actual problem type:", problem_type)
                             print("Score per problem type:", score_per_problem)
+                        problem_type = problem_type_decoded[0] # Assume all items in the batch have the same decoded problem type in order to do effecient batch processing
                         if self.record_score_per_problem == 2:
-                            with open("outputs/score_per_problem.txt", "a") as file:
+                            with open(f"{self.curr_dir}/outputs/score_per_problem.txt", "a") as file:
                                 for k in score_per_problem:
                                     file.write(problem_type + "," + k + "," + str(score_per_problem[k]) + "\n")
                         if self.record_score_per_problem == 1:
-                            with open("outputs/score_per_problem_training_and_testing.txt", "a") as file:
+                            with open(f"{self.curr_dir}/outputs/score_per_problem_training_and_testing.txt", "a") as file:
                                 for k in score_per_problem:
                                     file.write(problem_type + "," + k + "," + str(score_per_problem[k]) + "\n")
-                        problem_type = problem_type_decoded[0] # Assume all items in the batch have the same decoded problem type in order to do effecient batch processing
 
                         if   problem_type == "addition": # For addition, we can use the purely differentiable method we created (we don't have to though)
-                            symbolic_sums = [self.SE.add_SP(symbolic_encoding[i].unsqueeze(0).type_as(self.SE.vectors[self.SE.SP_n1])) for i in range(symbolic_encoding.shape[0])]
-                            symbolic_sums = [bind(symbolic_sums[i], self.SE.vectors[self.SE.SP_n1]).type_as(h) for i in range(symbolic_encoding.shape[0])]
+                            symbolic_sums = [self.SE.add_VSA(symbolic_encoding[i].unsqueeze(0).type_as(self.SE.vectors[self.SE.VSA_n1])) for i in range(symbolic_encoding.shape[0])]
+                            symbolic_sums = [bind(symbolic_sums[i], self.SE.vectors[self.SE.VSA_n1]).type_as(h) for i in range(symbolic_encoding.shape[0])]
                             final_symbol = torch.stack(symbolic_sums)
-                            decoded_n1 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].type_as(self.SE.vectors[self.SE.SP_n1]), self.SE.SP_n1))]) for i in range(symbolic_encoding.shape[0])]
-                            decoded_n2 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].type_as(self.SE.vectors[self.SE.SP_n1]), self.SE.SP_n2))]) for i in range(symbolic_encoding.shape[0])]
+                            #decoded_n1 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].type_as(self.SE.vectors[self.SE.VSA_n1]), self.SE.VSA_n1))]) for i in range(symbolic_encoding.shape[0])]
+                            #decoded_n2 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].type_as(self.SE.vectors[self.SE.VSA_n2]), self.SE.VSA_n2))]) for i in range(symbolic_encoding.shape[0])]
+                            decoded_n1 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n1]), self.SE.VSA_n1) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
+                            decoded_n2 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n2]), self.SE.VSA_n2) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
                             if verbose:
                                 print("Decoded symbolic encodings: first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "sum:", decoded_n1[0]+decoded_n2[0])
                             if verbose == 2:
                                 for k in range(1, _bsz):
                                     print("Decoded symbolic encodings: first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "sum:", decoded_n1[k]+decoded_n2[k])
                         else:
-                            decoded_n1 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].to(torch.float32), self.SE.SP_n1))]) for i in range(symbolic_encoding.shape[0])]
-                            decoded_n2 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].to(torch.float32), self.SE.SP_n2))]) for i in range(symbolic_encoding.shape[0])]
+                            #decoded_n1 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].to(torch.float32), self.SE.VSA_n1))]) for i in range(symbolic_encoding.shape[0])]
+                            #decoded_n2 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].to(torch.float32), self.SE.SVSA_n2))]) for i in range(symbolic_encoding.shape[0])]
+                            decoded_n1 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n1]), self.SE.VSA_n1) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
+                            decoded_n2 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n2]), self.SE.VSA_n2) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
 
                             if problem_type == "multiplication":
-                                decoded_prod  = [int(decoded_n1[i] * decoded_n2[i]) % 10**(complexity+1) for i in range(symbolic_encoding.shape[0])]
+                                decoded_prod  = [int(decoded_n1[i] * decoded_n2[i]) % 10**(self.complexity+1) for i in range(symbolic_encoding.shape[0])]
                                 if not self.use_specific_identities:
-                                    symbolic_prod = [self.SE.generate_SP(decoded_prod[i], 0,                                                    single_number_generation=double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
+                                    symbolic_prod = [self.SE.generate_VSA(decoded_prod[i], 0,                                                    single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
                                 else:
-                                    symbolic_prod = [self.SE.generate_SP(decoded_prod[i], problem_type_identity[problem_type](decoded_prod[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
+                                    symbolic_prod = [self.SE.generate_VSA(decoded_prod[i], problem_type_identity[problem_type](decoded_prod[i]), single_number_generation=False          ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
                                 final_symbol = torch.stack(symbolic_prod)
                                 if verbose:
-                                    print("Decoded symbolic encodings: first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "product:", decoded_n1[0]*decoded_n2[0] % 10**(complexity+1))
+                                    print("Decoded symbolic encodings: first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "product:", decoded_n1[0]*decoded_n2[0] % 10**(self.complexity+1))
                                 if verbose == 2:
                                     for k in range(1, _bsz):
-                                        print("Decoded symbolic encodings: first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "product:", decoded_n1[k]*decoded_n2[k] % 10**(complexity+1))
+                                        print("Decoded symbolic encodings: first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "product:", decoded_n1[k]*decoded_n2[k] % 10**(self.complexity+1))
 
                             elif problem_type == "division":
                                 symbolic_quots = []
@@ -483,9 +427,9 @@ class Transformer(nn.Module):
                                     else:
                                         decoded_quot = 0
                                     if not self.use_specific_identities:
-                                        symbolic_quot = self.SE.generate_SP(decoded_quot,                                                 0, single_number_generation=double_rep).to(torch.bfloat16).squeeze(0)
+                                        symbolic_quot = self.SE.generate_VSA(decoded_quot,                                                 0, single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
                                     else:
-                                        symbolic_quot = self.SE.generate_SP(decoded_quot, problem_type_identity[problem_type](decoded_quot), single_number_generation=False     ).to(torch.bfloat16).squeeze(0)
+                                        symbolic_quot = self.SE.generate_VSA(decoded_quot, problem_type_identity[problem_type](decoded_quot), single_number_generation=False          ).to(torch.bfloat16).squeeze(0)
                                     symbolic_quots += [symbolic_quot]
                                 final_symbol = torch.stack(symbolic_quots)
                                 if verbose:
@@ -504,9 +448,9 @@ class Transformer(nn.Module):
                                     else:
                                         decoded_mod = 0
                                     if not self.use_specific_identities:
-                                        symbolic_mod = self.SE.generate_SP(decoded_mod, 0,                                                single_number_generation=double_rep).to(torch.bfloat16).squeeze(0)
+                                        symbolic_mod = self.SE.generate_VSA(decoded_mod, 0,                                                single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
                                     else:
-                                        symbolic_mod = self.SE.generate_SP(decoded_mod, problem_type_identity[problem_type](decoded_mod), single_number_generation=False     ).to(torch.bfloat16).squeeze(0)
+                                        symbolic_mod = self.SE.generate_VSA(decoded_mod, problem_type_identity[problem_type](decoded_mod), single_number_generation=False          ).to(torch.bfloat16).squeeze(0)
 
                                     symbolic_mods += [symbolic_mod]
                                 final_symbol = torch.stack(symbolic_mods)
@@ -523,9 +467,9 @@ class Transformer(nn.Module):
                                 for i in range(symbolic_encoding.shape[0]):
                                     decoded_gcd = np.gcd(int(decoded_n1[i]), int(decoded_n2[i]))
                                     if not self.use_specific_identities:
-                                        symbolic_gcd = self.SE.generate_SP(decoded_gcd, 0,                                                single_number_generation=double_rep).to(torch.bfloat16).squeeze(0)
+                                        symbolic_gcd = self.SE.generate_VSA(decoded_gcd, 0,                                                single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
                                     else:
-                                        symbolic_gcd = self.SE.generate_SP(decoded_gcd, problem_type_identity[problem_type](decoded_gcd), single_number_generation=False     ).to(torch.bfloat16).squeeze(0)
+                                        symbolic_gcd = self.SE.generate_VSA(decoded_gcd, problem_type_identity[problem_type](decoded_gcd), single_number_generation=False          ).to(torch.bfloat16).squeeze(0)
                                     symbolic_gcds += [symbolic_gcd]
                                 final_symbol = torch.stack(symbolic_gcds)
                                 if verbose:
@@ -537,18 +481,18 @@ class Transformer(nn.Module):
                             elif problem_type == "lcm":
                                 symbolic_lcms = []
                                 for i in range(symbolic_encoding.shape[0]):
-                                    decoded_lcm  = np.lcm(int(decoded_n1[i]), int(decoded_n2[i])) % 10**(complexity+1)
+                                    decoded_lcm  = np.lcm(int(decoded_n1[i]), int(decoded_n2[i])) % 10**(self.complexity+1)
                                     if not self.use_specific_identities:
-                                        symbolic_lcm = self.SE.generate_SP(decoded_lcm, 0,                                                single_number_generation=double_rep).to(torch.bfloat16).squeeze(0)
+                                        symbolic_lcm = self.SE.generate_VSA(decoded_lcm, 0,                                                single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
                                     else:
-                                        symbolic_lcm = self.SE.generate_SP(decoded_lcm, problem_type_identity[problem_type](decoded_lcm), single_number_generation=False     ).to(torch.bfloat16).squeeze(0)
+                                        symbolic_lcm = self.SE.generate_VSA(decoded_lcm, problem_type_identity[problem_type](decoded_lcm), single_number_generation=False          ).to(torch.bfloat16).squeeze(0)
                                     symbolic_lcms += [symbolic_lcm]
                                 final_symbol = torch.stack(symbolic_lcms)
                                 if verbose:
-                                    print("Decoded symbolic encodings: first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "lcm:", np.lcm(int(decoded_n1[0]), int(decoded_n2[0])) % 10**(complexity+1))
+                                    print("Decoded symbolic encodings: first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "lcm:", np.lcm(int(decoded_n1[0]), int(decoded_n2[0])) % 10**(self.complexity+1))
                                 if verbose == 2:
                                     for k in range(1, _bsz):
-                                        print("Decoded symbolic encodings: first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "lcm:", np.lcm(int(decoded_n1[k]), int(decoded_n2[k])) % 10**(complexity+1))
+                                        print("Decoded symbolic encodings: first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "lcm:", np.lcm(int(decoded_n1[k]), int(decoded_n2[k])) % 10**(self.complexity+1))
 
                             elif problem_type == "square_mod":
                                 symbolic_sqs = []
@@ -558,9 +502,9 @@ class Transformer(nn.Module):
                                     else:
                                         decoded_sq = 0
                                     if not self.use_specific_identities:
-                                        symbolic_sq = self.SE.generate_SP(decoded_sq, 0,                                               single_number_generation=double_rep).to(torch.bfloat16).squeeze(0)
+                                        symbolic_sq = self.SE.generate_VSA(decoded_sq, 0,                                               single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
                                     else:
-                                        symbolic_sq = self.SE.generate_SP(decoded_sq, problem_type_identity[problem_type](decoded_sq), single_number_generation=False     ).to(torch.bfloat16).squeeze(0)
+                                        symbolic_sq = self.SE.generate_VSA(decoded_sq, problem_type_identity[problem_type](decoded_sq), single_number_generation=False     ).to(torch.bfloat16).squeeze(0)
                                     symbolic_sqs += [symbolic_sq]
                                 final_symbol = torch.stack(symbolic_sqs)
                                 if verbose:
@@ -574,9 +518,9 @@ class Transformer(nn.Module):
                             elif problem_type == "bitwise_and":
                                 decoded_and  = [int(decoded_n1[i]) & int(decoded_n2[i]) for i in range(symbolic_encoding.shape[0])]
                                 if not self.use_specific_identities:
-                                    symbolic_and = [self.SE.generate_SP(decoded_and[i], 0,                                                   single_number_generation=double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
+                                    symbolic_and = [self.SE.generate_VSA(decoded_and[i], 0,                                                   single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
                                 else:
-                                    symbolic_and = [self.SE.generate_SP(decoded_and[i], problem_type_identity[problem_type](decoded_and[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
+                                    symbolic_and = [self.SE.generate_VSA(decoded_and[i], problem_type_identity[problem_type](decoded_and[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
                                 final_symbol = torch.stack(symbolic_and)
                                 if verbose:
                                     print("Decoded symbolic encodings: first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_and:", int(decoded_n1[0]) & int(decoded_n2[0]))
@@ -587,9 +531,9 @@ class Transformer(nn.Module):
                             elif problem_type == "bitwise_xor":
                                 decoded_xor  = [int(decoded_n1[i]) ^ int(decoded_n2[i]) for i in range(symbolic_encoding.shape[0])]
                                 if not self.use_specific_identities:
-                                    symbolic_xor = [self.SE.generate_SP(decoded_xor[i], 0,                                                   single_number_generation=double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
+                                    symbolic_xor = [self.SE.generate_VSA(decoded_xor[i], 0,                                                   single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
                                 else:
-                                    symbolic_xor = [self.SE.generate_SP(decoded_xor[i], problem_type_identity[problem_type](decoded_xor[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
+                                    symbolic_xor = [self.SE.generate_VSA(decoded_xor[i], problem_type_identity[problem_type](decoded_xor[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
                                 final_symbol = torch.stack(symbolic_xor)
                                 if verbose:
                                     print("Decoded symbolic encodings: first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_xor:", int(decoded_n1[0]) ^ int(decoded_n2[0]))
@@ -600,9 +544,9 @@ class Transformer(nn.Module):
                             elif problem_type == "bitwise_or":
                                 decoded_or  = [int(decoded_n1[i]) | int(decoded_n2[i]) for i in range(symbolic_encoding.shape[0])]
                                 if not self.use_specific_identities:
-                                    symbolic_or = [self.SE.generate_SP(decoded_or[i], 0,                                                  single_number_generation=double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
+                                    symbolic_or = [self.SE.generate_VSA(decoded_or[i], 0,                                                  single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
                                 else:
-                                    symbolic_or = [self.SE.generate_SP(decoded_or[i], problem_type_identity[problem_type](decoded_or[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
+                                    symbolic_or = [self.SE.generate_VSA(decoded_or[i], problem_type_identity[problem_type](decoded_or[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
                                 final_symbol = torch.stack(symbolic_or)
                                 if verbose:
                                     print("Decoded symbolic encodings: first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_or:", int(decoded_n1[0]) | int(decoded_n2[0]))
@@ -615,10 +559,12 @@ class Transformer(nn.Module):
                             self.use_symbolic_layer = use_symbolic_layer
 
                         if self.calculate_encoding_accuracy:
+
                             for k in range(_bsz):
-                                for digit in range(complexity + 1):
-                                    self.encoding_accuracy[problem_type]["digit " + str(digit)]["first_number"]  += [str(int(decoded_n1[k])).zfill(complexity+1)[::-1][digit] == str(self.curr_x[k]).zfill(complexity+1)[::-1][digit]]
-                                    self.encoding_accuracy[problem_type]["digit " + str(digit)]["second_number"] += [str(int(decoded_n2[k])).zfill(complexity+1)[::-1][digit] == str(self.curr_y[k]).zfill(complexity+1)[::-1][digit]]
+                                for digit in range(self.complexity + 1):
+ 
+                                    self.encoding_accuracy[problem_type]["digit " + str(digit)]["first_number"]  += [str(int(decoded_n1[k])).zfill(self.complexity+1)[::-1][digit] == str(self.curr_x[k]).zfill(self.complexity+1)[::-1][digit]]
+                                    self.encoding_accuracy[problem_type]["digit " + str(digit)]["second_number"] += [str(int(decoded_n2[k])).zfill(self.complexity+1)[::-1][digit] == str(self.curr_y[k]).zfill(self.complexity+1)[::-1][digit]]
                     elif self.static_encoding: # If the curr_token is not 0 and we are using static_encoding, then just load the final_symbol and use_symbolic_layer as computed before
                         final_symbol       = self.final_symbol.clone()
                         use_symbolic_layer = self.use_symbolic_layer
@@ -626,17 +572,17 @@ class Transformer(nn.Module):
                     if self.encode_counter: 
                         final_symbol = final_symbol + self.SE.generate_counter(curr_token, _bsz) # Encode information corresponding to which token is currently being decoded
 
-            if n in symbolic_decoding_layers and (self.multi_token_intervention or curr_token == 0) and not bypass_symbolic:
-                if not add_noise:
+            if n in self.symbolic_decoding_layers and (self.multi_token_intervention or curr_token == 0) and not self.bypass_symbolic:
+                if not self.add_noise:
                     modified_h = self.decoders[n-self.starting_decoder_layer](final_symbol)
                     modified_h = modified_h.reshape(_bsz, self.params.dim)
-                if add_noise:
+                if self.add_noise:
                     modified_h = torch.randn_like(h[:,-1,:])
-                if normalize_vector:
+                if self.normalize_vector:
                     # Make sure the modified_h vector has the same statistical properties as the h we are adding it onto
                     modified_h = (modified_h - modified_h.mean()) / modified_h.std()
                     modified_h = modified_h * h[:,-1,:].mean() + h[:,-1,:].std()
-                if not rms_layer:
+                if not self.rms_layer:
                     # Concatenate the modified token of the LLM (the most recent token) with the rest of the tokens
                     h = torch.cat([h[:, :-1, :], torch.where(use_symbolic_layer, modified_h * (1 - self.skip_weights[skip_index]) + h[:, -1, :] * self.skip_weights[skip_index], h[:, -1, :]).unsqueeze(1)], dim=1)
                 else:
@@ -650,17 +596,17 @@ class Transformer(nn.Module):
         n = n + 1
     
         # Intervene after the final layer
-        if n in symbolic_decoding_layers and (self.multi_token_intervention or curr_token == 0) and not bypass_symbolic:
-            if not add_noise:
+        if n in self.symbolic_decoding_layers and (self.multi_token_intervention or curr_token == 0) and not self.bypass_symbolic:
+            if not self.add_noise:
                 modified_h = self.decoders[n-self.starting_decoder_layer](final_symbol)
                 modified_h = modified_h.reshape(_bsz, self.params.dim)
-            if add_noise:
+            if self.add_noise:
                 modified_h = torch.randn_like(h[:,-1,:])
-            if normalize_vector:
+            if self.normalize_vector:
                 # Make sure the modified_h vector has the same statistical properties as the h we are adding it onto
                 modified_h = (modified_h - modified_h.mean()) / modified_h.std()
                 modified_h = modified_h * h[:,-1,:].mean() + h[:,-1,:].std()
-            if not rms_layer:
+            if not self.rms_layer:
                 # Concatenate the modified token of the LLM (the most recent token) with the rest of the tokens
                 h = torch.cat([h[:, :-1, :], torch.where(use_symbolic_layer, modified_h * (1 - self.skip_weights[skip_index]) + h[:, -1, :] * self.skip_weights[skip_index], h[:, -1, :]).unsqueeze(1)], dim=1)
             else:
@@ -672,9 +618,9 @@ class Transformer(nn.Module):
         output = self.output(h).type_as(h)
 
         # Intervene at the output projection layer 
-        if (self.multi_token_intervention or curr_token == 0) and not bypass_symbolic and n in symbolic_decoding_layers:
+        if (self.multi_token_intervention or curr_token == 0) and not self.bypass_symbolic and n in self.symbolic_decoding_layers:
             modified_output = self.decoders[n-self.starting_decoder_layer](final_symbol)
-            if not rms_layer:
+            if not self.rms_layer:
                 output = torch.cat([output[:, :-1, :], torch.where(use_symbolic_layer, modified_output * (1 - self.skip_weights[skip_index]) + output[:, -1, :] * self.skip_weights[skip_index], output[:, -1, :]).unsqueeze(1)], dim=1)
             else:
                 output = torch.cat([output[:, :-1, :], (modified_output + output[:, -1, :]).unsqueeze(1)], dim=1)
@@ -682,15 +628,6 @@ class Transformer(nn.Module):
             skip_index = skip_index + 1
 
         return output, None, None
-
-    # Add the STE wrapper for the add_SP function
-    def add_SP_ste(self, tensor):
-        with torch.no_grad():
-            output = self.SE.add_SP(tensor)  # Perform non-differentiable operation
-            # Convert the numpy array `output` to a PyTorch tensor
-            output = torch.from_numpy(output).to(tensor.device)  # Ensure it's on the correct device (GPU/CPU)
-        # Straight-through estimator (STE) approximation
-        return tensor + (output - tensor).detach()
 
     @torch.inference_mode()
     def forward_no_tok_embedding(self, h: torch.Tensor, start_pos: int):
