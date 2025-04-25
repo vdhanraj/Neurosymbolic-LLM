@@ -1,0 +1,71 @@
+max_seq_len: 10000
+max_batch_size: 2
+model_parallel_size: 1
+max_digits: 5
+VSA_dim: 2048
+possible_problems: ["addition", "multiplication", "division", "modulo", "gcd", "lcm", "square_mod", "bitwise_and", "bitwise_xor", "bitwise_or"]
+
+encoder_path: ""
+decoder_path: ""
+save_model: true
+
+problem_type: ["multiplication", "modulo", "gcd", "lcm", "square_mod", "bitwise_and", "bitwise_xor", "bitwise_or"]
+complexity: 2
+temperature: 0
+
+train_model: true
+lora_baseline: false
+starting_skip_strength: 0.5
+problem_score_threshold: 0.8
+normalize_VSA_before_dot: false
+initialize_decoders: true
+normalize_vector: false
+rms_layer: false
+double_rep: true
+use_specific_identities: false
+trainable_skip: false
+symbolic_encoding_layer: 17
+symbolic_decoding_layers: [17]
+
+num_epochs: 1000
+n_samples: 2
+inference_to_backprop_ratio: 8
+learning_rate: 0.001
+learning_rate_reduction_factors:
+  100: 0.5
+  500: 0.5
+  1000: 0.4
+  2000: 0.1
+  4000: 0.5
+  6000: 0.5
+  8000: 0.5
+
+epochs_to_print: 10
+print_all_pts_freq: 100
+verbose: 0
+
+testing_problems: ["addition", "division", "multiplication", "modulo", "gcd", "lcm", "square_mod", "bitwise_and", "bitwise_xor", "bitwise_or"]
+testing_num_epochs: 100
+testing_inference_to_backprop_ratio: 1
+testing_n_samples: 2
+testing_temperature: 0
+testing_epochs_to_print: 0
+testing_verbose: 0
+record_score_per_problem: 2
+
+test_baseline: false
+cot: false
+test_on_unrelated_questions: false
+test_with_non_numerical_rep: false
+
+encoder_input_tokens: 1
+calculate_end_index: false
+
+multi_token_intervention: false
+static_encoding: true
+calculate_encoding_accuracy: true
+encode_counter: false
+
+limit_solution_digits: true
+save_responses: true
+simulate_perfect_encoder: false

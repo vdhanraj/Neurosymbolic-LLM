@@ -55,7 +55,8 @@ def generate_dialog(complexity=8, # complexity + 1 is the maximum number of digi
                     samples=1, # Number of samples to generate. Note all generated samples will be of the same problem type
                     problem_type="addition", # Problem type to generate. If set to "random" or a list of problem types, randomly select a problem type from either the entire set of possible problems or the specified subset, repsectively
                     cot=False,  # If true, use CoT prompting
-                    string_nums=False # If true, represent numbers as words (e.g., two hundred and one)
+                    string_nums=False, # If true, represent numbers as words (e.g., two hundred and one)
+                    limit_solution_digits=True, # If True, certain problem types whose solutions have more digits than their inputs will have their solutions truncated (via solution mod 10^(complexity + 1))
                     ):
     #x = np.random.randint(low=10**(complexity), high=10**(complexity+1), size=samples)
     x = np.random.randint(low=1, high=10**(complexity+1), size=samples)
@@ -137,18 +138,34 @@ def generate_dialog(complexity=8, # complexity + 1 is the maximum number of digi
 
         elif problem_type == "multiplication":
             if cot:
-                dialog[n] += [
-                    {"role": "user", "content": f"Solve the following problem step by step: " 
-                     f"What is {x[n]} times {y[n]} mod {10**(complexity+1)}?"},
-                ]
+                if limit_solution_digits:
+                    dialog[n] += [
+                        {"role": "user", "content": f"Solve the following problem step by step: " 
+                        f"What is {x[n]} times {y[n]} mod {10**(complexity+1)}?"},
+                    ]
+                else:
+                    dialog[n] += [
+                        {"role": "user", "content": f"Solve the following problem step by step: " 
+                        f"What is {x[n]} times {y[n]}?"},
+                    ]
             else:
-                dialog[n] += [
-                    {"role": "user", "content": f"What is {example_x1} times {example_y1} mod {10**(complexity+1)}?"},
-                    {"role": "assistant", "content": f"{conv_inv((conv(example_x1) * conv(example_y1)) % 10**(complexity+1))}"},
-                    {"role": "user", "content": f"What is {example_x2} times {example_y2} mod {10**(complexity+1)}?"},
-                    {"role": "assistant", "content": f"{conv_inv((conv(example_x2) * conv(example_y2)) % 10**(complexity+1))}"},
-                    {"role": "user", "content": f"What is {x[n]} times {y[n]} mod {10**(complexity+1)}?"},
-                ]
+                if limit_solution_digits:
+                    dialog[n] += [
+                        {"role": "user", "content": f"What is {example_x1} times {example_y1} mod {10**(complexity+1)}?"},
+                        {"role": "assistant", "content": f"{conv_inv((conv(example_x1) * conv(example_y1)) % 10**(complexity+1))}"},
+                        {"role": "user", "content": f"What is {example_x2} times {example_y2} mod {10**(complexity+1)}?"},
+                        {"role": "assistant", "content": f"{conv_inv((conv(example_x2) * conv(example_y2)) % 10**(complexity+1))}"},
+                        {"role": "user", "content": f"What is {x[n]} times {y[n]} mod {10**(complexity+1)}?"},
+                    ]
+                else:
+                    dialog[n] += [
+                        {"role": "user", "content": f"What is {example_x1} times {example_y1}?"},
+                        {"role": "assistant", "content": f"{conv_inv((conv(example_x1) * conv(example_y1)))}"},
+                        {"role": "user", "content": f"What is {example_x2} times {example_y2}?"},
+                        {"role": "assistant", "content": f"{conv_inv((conv(example_x2) * conv(example_y2)))}"},
+                        {"role": "user", "content": f"What is {x[n]} times {y[n]}?"},
+                    ]
+
 
         elif problem_type == "division":
             if cot:
@@ -197,18 +214,34 @@ def generate_dialog(complexity=8, # complexity + 1 is the maximum number of digi
 
         elif problem_type == "lcm":
             if cot:
-                dialog[n] += [
-                    {"role": "user", "content": f"Solve the following problem step by step: " 
-                     f"What is the LCM of {x[n]} and {y[n]} mod {10**(complexity+1)}?"},
-                ]
+                if limit_solution_digits:
+                    dialog[n] += [
+                        {"role": "user", "content": f"Solve the following problem step by step: " 
+                        f"What is the LCM of {x[n]} and {y[n]} mod {10**(complexity+1)}?"},
+                    ]
+                else:
+                    dialog[n] += [
+                        {"role": "user", "content": f"Solve the following problem step by step: " 
+                        f"What is the LCM of {x[n]} and {y[n]}?"},
+                    ]
+
             else:
-                dialog[n] += [
-                    {"role": "user", "content": f"What is the LCM of {example_x1} and {example_y1} mod {10**(complexity+1)}?"},
-                    {"role": "assistant", "content": f"{conv_inv(np.lcm(conv(example_x1), conv(example_y1)) % 10**(complexity+1))}"},
-                    {"role": "user", "content": f"What is the LCM of {example_x2} and {example_y2} mod {10**(complexity+1)}?"},
-                    {"role": "assistant", "content": f"{conv_inv(np.lcm(conv(example_x2), conv(example_y2)) % 10**(complexity+1))}"},
-                    {"role": "user", "content": f"What is the LCM of {x[n]} and {y[n]} mod {10**(complexity+1)}?"},
-                ]
+                if limit_solution_digits:
+                    dialog[n] += [
+                        {"role": "user", "content": f"What is the LCM of {example_x1} and {example_y1} mod {10**(complexity+1)}?"},
+                        {"role": "assistant", "content": f"{conv_inv(np.lcm(conv(example_x1), conv(example_y1)) % 10**(complexity+1))}"},
+                        {"role": "user", "content": f"What is the LCM of {example_x2} and {example_y2} mod {10**(complexity+1)}?"},
+                        {"role": "assistant", "content": f"{conv_inv(np.lcm(conv(example_x2), conv(example_y2)) % 10**(complexity+1))}"},
+                        {"role": "user", "content": f"What is the LCM of {x[n]} and {y[n]} mod {10**(complexity+1)}?"},
+                    ]
+                else:
+                    dialog[n] += [
+                        {"role": "user", "content": f"What is the LCM of {example_x1} and {example_y1}?"},
+                        {"role": "assistant", "content": f"{conv_inv(np.lcm(conv(example_x1), conv(example_y1)))}"},
+                        {"role": "user", "content": f"What is the LCM of {example_x2} and {example_y2}?"},
+                        {"role": "assistant", "content": f"{conv_inv(np.lcm(conv(example_x2), conv(example_y2)))}"},
+                        {"role": "user", "content": f"What is the LCM of {x[n]} and {y[n]}?"},
+                    ]
 
         elif problem_type == "square_mod":
             if cot:

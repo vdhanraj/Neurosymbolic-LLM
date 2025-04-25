@@ -37,14 +37,21 @@ from fairscale.nn.model_parallel.initialize import (
 ######################################################
 
 # Parser
+curr_date = datetime.datetime.now().strftime("%Y%m%d")
 
 pre_parser = argparse.ArgumentParser(description="Config Loader", add_help=False)
 pre_parser.add_argument("--config", type=str, default="train_encoders_and_decoders_default_config.yaml", help="Path to YAML configuration file")
+pre_parser.add_argument("--master_port", type=int, default=29500, help="Port for distributed init (must be unique per job)")
+pre_parser.add_argument("--run_name", type=str, default=curr_date, help="Name of run (used for wandb and to save model files)")
+
+
 config_args, remaining_argv = pre_parser.parse_known_args()
 
 with open(config_args.config, "r") as f:
     config_defaults = yaml.safe_load(f)
 
+master_port = str(config_args.master_port)
+run_name    = config_args.run_name
 
 # --- Full CLI parser with YAML defaults ---
 parser = argparse.ArgumentParser(description="Train Encoders and Decoders")
@@ -87,13 +94,14 @@ parser.add_argument("--problem_type", nargs="+", type=str, default=config_defaul
 
 # === Token handling ===
 parser.add_argument("--tokens_to_keep", type=str, default=config_defaults.get("tokens_to_keep"), help="How many tokens to keep (or 'all')")
-parser.add_argument("--calculate_end_index", type=bool, default=config_defaults.get("calculate_end_index"), help="Whether to cut tokens at the end of the prompt")
+parser.add_argument("--calculate_end_index", type=int, default=config_defaults.get("calculate_end_index"), help="Whether to cut tokens at the end of the prompt")
 
 # === Encoder/Decoder training ===
 parser.add_argument("--encoder_decoder_batch_size", type=int, default=config_defaults.get("encoder_decoder_batch_size"), help="Training batch size")
 parser.add_argument("--training_epochs", type=int, default=config_defaults.get("training_epochs"), help="Number of epochs for encoder training")
 parser.add_argument("--learning_rate", type=float, default=config_defaults.get("learning_rate"), help="Base learning rate for encoder")
 parser.add_argument("--learning_rate_reduction_factors", type=json.loads, default=config_defaults.get("learning_rate_reduction_factors"), help="Epoch:Factor map for reducing LR")
+parser.add_argument("--train_freq_print", type=int, default=config_defaults.get("train_freq_print"), help="Frequency of print statements during training")
 
 parser.add_argument("--decoding_epochs", type=int, default=config_defaults.get("decoding_epochs"), help="Number of epochs for decoder training")
 parser.add_argument("--decoding_learning_rate", type=float, default=config_defaults.get("decoding_learning_rate"), help="Base learning rate for decoder")
@@ -130,20 +138,22 @@ test_data_rounds       = args.test_data_rounds
 restrict_train_dataset = args.restrict_train_dataset
 restrict_test_dataset  = args.restrict_test_dataset
 save_frequency         = args.save_frequency
-layer_numbers          = args.layer_numbers
+layer_numbers          = torch.tensor(args.layer_numbers)
 complexity             = args.complexity
 n_samples              = args.n_samples
 problem_type           = args.problem_type
 
 # Tokenization
-tokens_to_keep      = args.tokens_to_keep
+tokens_to_keep      = args.tokens_to_keep if args.tokens_to_keep == "all" else int(args.tokens_to_keep)
 calculate_end_index = args.calculate_end_index
 
 # Encoder/decoder training
-encoder_decoder_training_batch_size      = args.encoder_decoder_batch_size
+encoder_decoder_batch_size               = args.encoder_decoder_batch_size
 training_epochs                          = args.training_epochs
 learning_rate                            = args.learning_rate
 learning_rate_reduction_factors          = args.learning_rate_reduction_factors
+train_freq_print                         = args.train_freq_print
+
 decoding_training_epochs                 = args.decoding_epochs
 decoding_learning_rate                   = args.decoding_learning_rate
 decoding_learning_rate_reduction_factors = args.decoding_learning_rate_reduction_factors
@@ -160,21 +170,21 @@ from llama import Llama
 
 ######################################################
 
-curr_date = datetime.datetime.now().strftime("%Y%m%d")
 
 if log_wandb:
     wandb.finish() # If there is an active current run, terminate it
     if generate_data:
         wandb.init(
             project = "Symbolic LLM - Generate Encoder Input Data",
-            name    = f"{curr_date}",
+            name    = run_name,
         )
     else:
         wandb.init(
             project = "Symbolic LLM - Train Encoders and Decoders",
-            name    = f"{curr_date}",
+            name    = run_name,
         )
 
+print("Run:", run_name)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Current device:", torch.cuda.get_device_name(torch.cuda.current_device()))
@@ -183,7 +193,7 @@ if generate_data:
     os.environ['RANK'] = "0"
     os.environ['WORLD_SIZE'] = "1"
     os.environ['MASTER_ADDR'] = "127.0.0.2"
-    os.environ['MASTER_PORT'] = "29502"
+    os.environ['MASTER_PORT'] = master_port
     os.environ['LOCAL_RANK']  = "0"
     os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
     os.environ['TORCH_USE_CUDA_DSA'] = "1"
@@ -194,6 +204,9 @@ if generate_data:
         max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
     )
+
+    for param in generator.model.parameters():
+        param.requires_grad = False
 else:
     if torch.cuda.is_bf16_supported():
         torch.set_default_dtype(torch.bfloat16)
@@ -202,16 +215,15 @@ else:
 
     torch.set_default_device("cuda")
 
-
-max_digits = 5 #15 # maximum representable number is 10**max_digits
-VSA_dim = 2048
-
-possible_problems=["addition", "multiplication", "division", "modulo", "gcd", "lcm", "square_mod", "bitwise_and", "bitwise_xor", "bitwise_or"]
-
-SE = SymbolicEngine(VSA_dim=VSA_dim, max_digits=max_digits, possible_problems=possible_problems, 
-                    curr_dir=curr_dir)
 possible_problems_str = "_".join(possible_problems)
-torch.save(SE, f"{curr_dir}/VSA_library/symbolic_engine_VSA_dim_{VSA_dim}_max_digits_{max_digits}_problem_types_{possible_problems_str}.pt")
+
+if os.path.exists(f"{curr_dir}/VSA_library/symbolic_engine_VSA_dim_{VSA_dim}_max_digits_{max_digits}_problem_types_{possible_problems_str}.pt"):
+    SE = torch.load(f"{curr_dir}/VSA_library/symbolic_engine_VSA_dim_{VSA_dim}"
+                    f"_max_digits_{max_digits}_problem_types_{possible_problems_str}.pt", weights_only=False)
+else:
+    SE = SymbolicEngine(VSA_dim=VSA_dim, max_digits=max_digits, possible_problems=possible_problems, 
+                        curr_dir=curr_dir)
+    torch.save(SE, f"{curr_dir}/VSA_library/symbolic_engine_VSA_dim_{VSA_dim}_max_digits_{max_digits}_problem_types_{possible_problems_str}.pt")
 
 if type(problem_type) == type([]):
     problem_str = "_".join(problem_type)
@@ -238,11 +250,11 @@ if generate_data:
 if not generate_data:
     training_encoder_data_loaders = generate_data_loaders(train=True, save_dir=save_dir, data_rounds=train_data_rounds, 
                                                           save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=restrict_train_dataset, 
-                                                          tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_training_batch_size, verbose=True)
+                                                          tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, verbose=True)
     print("Training data loaders for each layer have been created.")
     testing_encoder_data_loaders = generate_data_loaders(train=False, save_dir=save_dir, data_rounds=test_data_rounds, 
                                                          save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=restrict_test_dataset, 
-                                                         tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_training_batch_size, verbose=True)
+                                                         tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, verbose=True)
     print("Testing data loaders for each layer have been created.")
 
     encoders = torch.nn.ModuleList()
@@ -287,7 +299,7 @@ if not generate_data:
             running_losses[n] = running_loss
             total_norm   /= (batch_idx + 1)
             losses[n][i] = running_loss
-        if not i % 100:
+        if not i % train_freq_print:
             print("Epoch:", i, "Running Loss:", running_losses.mean(), f"\tTotal gradient norm: {total_norm}")
 
     plt.plot(losses.mean(axis=0)[:i], marker=".")
@@ -305,10 +317,10 @@ if not generate_data:
     x_ticks = np.arange(0, len(losses.T.mean(axis=0)[:-1]), 1)
     plt.xticks(x_ticks, rotation=75)
     plt.title("Average RMSE Loss vs Layer Number")
-    plt.ylabel("Final RMSE Loss")
+    plt.ylabel("Average RMSE Loss")
     plt.xlabel("Layer Number")
     if log_wandb:
-        wandb.log({f"Final RMSE Loss vs Layer Number": wandb.Image(plt)})
+        wandb.log({f"Average RMSE Loss vs Layer Number": wandb.Image(plt)})
     else:
         plt.show()
     plt.close()
@@ -381,7 +393,7 @@ if not generate_data:
             decoding_running_losses[n] = decoding_running_loss
             total_norm   /= (batch_idx + 1)
             decoding_losses[n][j] = decoding_running_loss
-        if not j % 5 and j:
+        if not j % train_freq_print and j:
             print("Epoch:", j, "Running Loss:", decoding_running_losses.mean(), f"\tTotal gradient norm: {total_norm}")
 
 
@@ -422,12 +434,12 @@ if not generate_data:
 
     if not os.path.exists(f"{curr_dir}/models"):
         os.mkdir(f"{curr_dir}/models")
-    torch.save(encoders.state_dict(), f"{curr_dir}/models/encoders_state_dict_{curr_date}.pth")
-    torch.save(encoders,              f"{curr_dir}/models/encoders_{curr_date}.pth")
-    print("Saved:", f"{curr_dir}/models/encoders_state_dict_{curr_date}.pth", "and", f"models/encoders_{curr_date}.pth")
-    torch.save(decoders.state_dict(), f"{curr_dir}/models/decoders_state_dict_{curr_date}.pth")
-    torch.save(decoders,              f"{curr_dir}/models/decoders_{curr_date}.pth")
-    print("Saved:", f"{curr_dir}/models/decoders_state_dict_{curr_date}.pth", "and", f"models/decoders_{curr_date}.pth")
+    torch.save(encoders.state_dict(), f"{curr_dir}/models/encoders_state_dict_{run_name}.pth")
+    torch.save(encoders,              f"{curr_dir}/models/encoders_{run_name}.pth")
+    print("Saved:", f"{curr_dir}/models/encoders_state_dict_{run_name}.pth", "and", f"models/encoders_{run_name}.pth")
+    torch.save(decoders.state_dict(), f"{curr_dir}/models/decoders_state_dict_{run_name}.pth")
+    torch.save(decoders,              f"{curr_dir}/models/decoders_{run_name}.pth")
+    print("Saved:", f"{curr_dir}/models/decoders_state_dict_{run_name}.pth", "and", f"models/decoders_{run_name}.pth")
 
     ####################################################################################################
     

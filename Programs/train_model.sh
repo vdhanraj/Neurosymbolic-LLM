@@ -28,9 +28,8 @@
 # Set up environment on watgpu.cs or in interactive session (use `source` keyword instead of `conda`)
 source /opt/anaconda3/etc/profile.d/conda.sh
 conda activate torch
- 
+
 # Task to run
- 
-python ~/Neurosymbolic-LLM/Programs/train_encoders_and_decoders.py --generate_data 1
-python ~/Neurosymbolic-LLM/Programs/train_encoders_and_decoders.py
-python ~/Neurosymbolic-LLM/Programs/fine_tune_decoders.py
+python ~/Neurosymbolic-LLM/Programs/train_encoders_and_decoders.py --generate_data 1 --max_digits 5 --VSA_dim 2048 --train_data_rounds 100000 --test_data_rounds 10000 --complexity 3 --tokens_to_keep all --calculate_end_index 1
+python ~/Neurosymbolic-LLM/Programs/train_encoders_and_decoders.py --generate_data 0 --max_digits 5 --VSA_dim 2048 --train_data_rounds 100000 --test_data_rounds 10000 --complexity 3 --tokens_to_keep all --calculate_end_index 1 --restrict_train_dataset 10000  --restrict_test_dataset 1000
+python ~/Neurosymbolic-LLM/Programs/train_encoders_and_decoders.py --generate_data 0 --max_digits 5 --VSA_dim 2048 --train_data_rounds 100000 --test_data_rounds 10000 --complexity 3 --tokens_to_keep all --calculate_end_index 1 --restrict_train_dataset 100000 --restrict_test_dataset 10000

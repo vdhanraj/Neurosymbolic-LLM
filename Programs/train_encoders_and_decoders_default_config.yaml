@@ -65,6 +65,7 @@ learning_rate_reduction_factors:
   100: 0.5
   250: 0.1
   500: 0.4
+train_freq_print: 100
 
 decoding_epochs: 1000
 decoding_learning_rate: 0.001
