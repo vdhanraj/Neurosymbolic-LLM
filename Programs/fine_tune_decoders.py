@@ -100,6 +100,7 @@ parser.add_argument("--complexity",                type=int,   default=config_de
 parser.add_argument("--temperature",               type=float, default=config_defaults.get("temperature"), required=False)
 
 parser.add_argument("--train_model",               type=str2bool,  default=config_defaults.get("train_model"), required=False)
+parser.add_argument("--test_model",                type=str2bool,  default=config_defaults.get("test_model"),  required=False)
 parser.add_argument("--lora_baseline",             type=str2bool,  default=config_defaults.get("lora_baseline"), required=False)
 parser.add_argument("--starting_skip_strength",    type=float, default=config_defaults.get("starting_skip_strength"), required=False)
 parser.add_argument("--problem_score_threshold",   type=float, default=config_defaults.get("problem_score_threshold"), required=False)
@@ -148,10 +149,10 @@ parser.add_argument("--static_encoding",             type=str2bool, default=conf
 parser.add_argument("--calculate_encoding_accuracy", type=str2bool, default=config_defaults.get("calculate_encoding_accuracy"), required=False)
 parser.add_argument("--encode_counter",              type=str2bool, default=config_defaults.get("encode_counter"), required=False)
 
-parser.add_argument("--limit_solution_digits",       type=str2bool, default=config_defaults.get("limit_solution_digits"), required=False)
-parser.add_argument("--save_responses",              type=str2bool, default=config_defaults.get("save_responses"), required=False)
+parser.add_argument("--limit_solution_digits",       type=str2bool, default=config_defaults.get("limit_solution_digits"),    required=False)
+parser.add_argument("--save_responses",              type=str2bool, default=config_defaults.get("save_responses"),           required=False)
 parser.add_argument("--simulate_perfect_encoder",    type=str2bool, default=config_defaults.get("simulate_perfect_encoder"), required=False)
-
+parser.add_argument("--modify_question_format",      type=str2bool, default=config_defaults.get("modify_question_format"),   required=False)
 
 # === Final parse ===
 args = parser.parse_args(remaining_argv)
@@ -161,6 +162,9 @@ args.git_dir             = str(Path(args.git_dir ).expanduser())
 args.ckpt_dir            = str(Path(args.ckpt_dir).expanduser())
 args.tokenizer_path      = str(Path(args.tokenizer_path).expanduser())
 args.log_wandb           = bool(args.log_wandb)
+
+args.n_samples         = min(args.n_samples,         args.max_batch_size)
+args.testing_n_samples = min(args.testing_n_samples, args.max_batch_size)
 
 curr_dir = args.curr_dir
 git_dir  = args.git_dir
@@ -249,6 +253,7 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
     total_score = 0
     outputs = []
     all_correct_responses = []
+    all_dialogs = []
     pts     = []
 
     for n in range(inference_to_backprop_ratio):
@@ -258,8 +263,9 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
 
         total_loss = 0
 
-        dialogs, x, y, curr_problem_type = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type, limit_solution_digits=generator.model.limit_solution_digits)
-
+        dialogs, x, y, curr_problem_type = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type, 
+                                                           limit_solution_digits=generator.model.limit_solution_digits, modify_question_format=generator.model.modify_question_format)
+        all_dialogs += [dialogs]
         if generator.model.encoder_input_tokens == "all":
             start_indices, end_indices    = get_dialog_indices(generator, dialogs, calculate_end_index=generator.model.calculate_end_index)
             generator.model.curr_start_indices = start_indices
@@ -267,8 +273,9 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
             generator.model.dialogs            = dialogs
 
         if generator.model.calculate_encoding_accuracy:
-            generator.model.curr_x = x
-            generator.model.curr_y = y
+            generator.model.curr_x  = x
+            generator.model.curr_y  = y
+            generator.model.curr_pt = curr_problem_type
 
         pts += [curr_problem_type]
         if curr_problem_type=="addition":
@@ -400,7 +407,8 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
     response_data = {
         "Model Guesses": outputs,
         "Correct Answer": all_correct_responses,
-        "Losses": losses
+        "Losses": losses,
+        "All Dialogs": dialogs,
     }
 
 
@@ -432,7 +440,8 @@ def inference_step(n_samples, generator, temperature=0, problem_type="addition",
             dialogs, x, y, curr_problem_type = generate_dialog(complexity=complexity, samples=n_samples, 
                                                                problem_type=problem_type, cot=cot,
                                                                string_nums=generator.model.test_with_non_numerical_rep,
-                                                               limit_solution_digits=generator.model.limit_solution_digits)
+                                                               limit_solution_digits=generator.model.limit_solution_digits,
+                                                               modify_question_format=generator.model.modify_question_format)
             if generator.model.encoder_input_tokens == "all":
                 start_indices, end_indices    = get_dialog_indices(generator, dialogs, calculate_end_index=generator.model.calculate_end_index)
                 generator.model.curr_start_indices = start_indices
@@ -672,6 +681,7 @@ def run_experiment(generator, config):
     temperature                         = config['temperature']
 
     train_model                         = config['train_model']
+    test_model                          = config['test_model']
     lora_baseline                       = config['lora_baseline']
     starting_skip_strength              = config['starting_skip_strength']
     problem_score_threshold             = config['problem_score_threshold']
@@ -719,6 +729,7 @@ def run_experiment(generator, config):
     limit_solution_digits               = config['limit_solution_digits']
     save_responses                      = config['save_responses']
     simulate_perfect_encoder            = config['simulate_perfect_encoder']
+    modify_question_format              = config['modify_question_format']
 
     #######################################################################################
     ############################## Hyperparameter Definition ##############################
@@ -740,6 +751,9 @@ def run_experiment(generator, config):
         test_baseline = 0
         train_model = False
 
+    if not test_model:
+        if record_score_per_problem == 2:
+            record_score_per_problem = 1
 
     if type(problem_type) == list:
         losses_per_pt = {pt: [] for pt in problem_type}
@@ -824,6 +838,7 @@ def run_experiment(generator, config):
 
     generator.model.limit_solution_digits       = limit_solution_digits
     generator.model.simulate_perfect_encoder    = simulate_perfect_encoder
+    generator.model.modify_question_format      = modify_question_format
 
     if generator.model.calculate_encoding_accuracy:
         # During training, calculate accuracy per problem type, per digit, per input number
@@ -873,6 +888,7 @@ def run_experiment(generator, config):
             for p in generator.model.decoders[sl-generator.model.starting_decoder_layer].parameters():
                 p = pseudo_inverses[sl-generator.model.starting_decoder_layer]
 
+
     if 33 in symbolic_decoding_layers:
         generator.model.decoders.append(ColumnParallelLinear(
             generator.model.SE.VSA_dim, generator.model.output.weight.shape[0], bias=False, init_method=lambda x: x
@@ -896,6 +912,10 @@ def run_experiment(generator, config):
         with open(tmp_path, "wb") as f:
             pickle.dump(obj, f)
         os.replace(tmp_path, path)
+
+    #####################################################################
+    ############################# Training ##############################
+    #####################################################################
 
 
     if train_model:
@@ -930,8 +950,6 @@ def run_experiment(generator, config):
             #    for sl in symbolic_decoding_layers:
             #        if f"decoders.{sl-generator.model.starting_decoder_layer}.decoder_layer" in name  or name == "layers.0.feed_forward.w1.weight":
             #            original_weights[name] = param.clone().detach()
-
-
 
             # Training loop
 
@@ -971,10 +989,11 @@ def run_experiment(generator, config):
                     "loss":  loss,
                     "score": score
                 })
-
-            for n, sw in enumerate(generator.model.skip_weights.detach().cpu().float().numpy()):
-                if log_wandb:
-                    wandb.log({f"skip_weights_{n}": sw})
+            
+            if not rms_layer:
+                for n, sw in enumerate(generator.model.skip_weights.detach().cpu().float().numpy()):
+                    if log_wandb:
+                        wandb.log({f"skip_weights_{n}": sw})
 
             if epochs_to_print and num_epochs // epochs_to_print and not epoch % (num_epochs // epochs_to_print):
                 if num_epochs // epochs_to_print >= 10:
@@ -1072,92 +1091,89 @@ def run_experiment(generator, config):
                     wandb.log({f"final_score_{pt}": np.mean(pt_scores[:-10])})  # Log to wandb
                     wandb.log({f"final_loss_{pt}" : np.mean(pt_losses[:-10])})  # Log to wandb
 
+
     #####################################################################
     ############################## Testing ##############################
     #####################################################################
 
-    #if type(problem_type) == str:
-    #    testing_problems = [problem_type]
-    #else:
-    #    testing_problems = problem_type
-
-    testing_losses_per_pt_SYM = {}
-    testing_losses_per_pt_LLM = {}
-    testing_scores_per_pt_SYM = {}
-    testing_scores_per_pt_LLM = {}
-    
+    if test_model:
+        testing_losses_per_pt_SYM = {}
+        testing_losses_per_pt_LLM = {}
+        testing_scores_per_pt_SYM = {}
+        testing_scores_per_pt_LLM = {}
+        
 
 
-    for pt in testing_problems:
-        print("~~~~~~~~ Problem Type:", pt, "~~~~~~~~")
-        if test_baseline != 2:
-            # Symbolic LLM
-            generator.model.bypass_symbolic = False
-            generator.model.add_noise       = False
-            losses, scores, responses  = evaluate_model(testing_n_samples=testing_n_samples,
-                                                        testing_num_epochs=testing_num_epochs,
-                                                        testing_temperature=testing_temperature,
-                                                        problem_type=pt, generator=generator, criterion=criterion,
-                                                        inference_to_backprop_ratio=testing_inference_to_backprop_ratio,
-                                                        complexity=complexity, cot=cot,
-                                                        testing_epochs_to_print=testing_epochs_to_print, testing_verbose=testing_verbose)
-
-            testing_losses_per_pt_SYM[pt] = losses
-            testing_scores_per_pt_SYM[pt] = scores
-
-            symbolic_output_text = plot_results(losses, scores, pt, generator.model.bypass_symbolic)
-            if log_wandb:
-                wandb.log({f"testing_losses_per_pt_SYM_{pt}": testing_losses_per_pt_SYM[pt]})
-                wandb.log({f"average_testing_loss_SYM_{pt}": np.mean(testing_losses_per_pt_SYM[pt])})
-                wandb.log({f"testing_scores_per_pt_SYM_{pt}": testing_scores_per_pt_SYM[pt]})
-                wandb.log({f"average_testing_score_SYM_{pt}": np.mean(testing_scores_per_pt_SYM[pt])})
-                wandb.log({f"symbolic_output_text_{pt}": symbolic_output_text})
-
-        if test_baseline != 0:
-            # Standard LLM
-            generator.model.bypass_symbolic = True
-            generator.model.add_noise       = False
-            losses, scores, responses  = evaluate_model(testing_n_samples=testing_n_samples,
-                                                        testing_num_epochs=testing_num_epochs,
-                                                        testing_temperature=testing_temperature,
-                                                        problem_type=pt, generator=generator, criterion=criterion,
-                                                        inference_to_backprop_ratio=testing_inference_to_backprop_ratio,
-                                                        complexity=complexity, cot=cot,
-                                                        testing_epochs_to_print=testing_epochs_to_print, testing_verbose=testing_verbose)
-            testing_losses_per_pt_LLM[pt] = losses
-            testing_scores_per_pt_LLM[pt] = scores
-
-            standard_output_text = plot_results(losses, scores, pt, generator.model.bypass_symbolic)
-            if log_wandb:
-                wandb.log({f"testing_losses_per_pt_LLM_{pt}": testing_losses_per_pt_LLM[pt]})
-                wandb.log({f"average_testing_loss_LLM_{pt}": np.mean(testing_losses_per_pt_LLM[pt])})
-                wandb.log({f"testing_scores_per_pt_LLM_{pt}": testing_scores_per_pt_LLM[pt]})
-                wandb.log({f"average_testing_score_LLM_{pt}": np.mean(testing_scores_per_pt_LLM[pt])})
-                wandb.log({f"standard_output_text_{pt}": standard_output_text})
-
-
-    for pt in testing_problems:
-        if testing_verbose:
+        for pt in testing_problems:
             print("~~~~~~~~ Problem Type:", pt, "~~~~~~~~")
-        if test_baseline != 2:
-            plt.hist(testing_losses_per_pt_SYM[pt], bins=75)
-            plt.xlabel("Loss")
-            plt.title(f"{pt} Symbolic Loss Histogram")
-            if testing_verbose:
-                plt.show()
-            if log_wandb:
-                wandb.log({f"{pt}_symbolic_loss_histogram": wandb.Image(plt)})  # Log to wandb
-            plt.close()
+            if test_baseline != 2:
+                # Symbolic LLM
+                generator.model.bypass_symbolic = False
+                generator.model.add_noise       = False
+                losses, scores, responses  = evaluate_model(testing_n_samples=testing_n_samples,
+                                                            testing_num_epochs=testing_num_epochs,
+                                                            testing_temperature=testing_temperature,
+                                                            problem_type=pt, generator=generator, criterion=criterion,
+                                                            inference_to_backprop_ratio=testing_inference_to_backprop_ratio,
+                                                            complexity=complexity, cot=cot,
+                                                            testing_epochs_to_print=testing_epochs_to_print, testing_verbose=testing_verbose)
 
-        if test_baseline != 0:
-            plt.hist(testing_losses_per_pt_LLM[pt], bins=75)
-            plt.xlabel("Loss")
-            plt.title(f"{pt} Standard Loss Histogram")
+                testing_losses_per_pt_SYM[pt] = losses
+                testing_scores_per_pt_SYM[pt] = scores
+
+                symbolic_output_text = plot_results(losses, scores, pt, generator.model.bypass_symbolic)
+                if log_wandb:
+                    wandb.log({f"testing_losses_per_pt_SYM_{pt}": testing_losses_per_pt_SYM[pt]})
+                    wandb.log({f"average_testing_loss_SYM_{pt}": np.mean(testing_losses_per_pt_SYM[pt])})
+                    wandb.log({f"testing_scores_per_pt_SYM_{pt}": testing_scores_per_pt_SYM[pt]})
+                    wandb.log({f"average_testing_score_SYM_{pt}": np.mean(testing_scores_per_pt_SYM[pt])})
+                    wandb.log({f"symbolic_output_text_{pt}": symbolic_output_text})
+
+            if test_baseline != 0:
+                # Standard LLM
+                generator.model.bypass_symbolic = True
+                generator.model.add_noise       = False
+                losses, scores, responses  = evaluate_model(testing_n_samples=testing_n_samples,
+                                                            testing_num_epochs=testing_num_epochs,
+                                                            testing_temperature=testing_temperature,
+                                                            problem_type=pt, generator=generator, criterion=criterion,
+                                                            inference_to_backprop_ratio=testing_inference_to_backprop_ratio,
+                                                            complexity=complexity, cot=cot,
+                                                            testing_epochs_to_print=testing_epochs_to_print, testing_verbose=testing_verbose)
+                testing_losses_per_pt_LLM[pt] = losses
+                testing_scores_per_pt_LLM[pt] = scores
+
+                standard_output_text = plot_results(losses, scores, pt, generator.model.bypass_symbolic)
+                if log_wandb:
+                    wandb.log({f"testing_losses_per_pt_LLM_{pt}": testing_losses_per_pt_LLM[pt]})
+                    wandb.log({f"average_testing_loss_LLM_{pt}": np.mean(testing_losses_per_pt_LLM[pt])})
+                    wandb.log({f"testing_scores_per_pt_LLM_{pt}": testing_scores_per_pt_LLM[pt]})
+                    wandb.log({f"average_testing_score_LLM_{pt}": np.mean(testing_scores_per_pt_LLM[pt])})
+                    wandb.log({f"standard_output_text_{pt}": standard_output_text})
+
+
+        for pt in testing_problems:
             if testing_verbose:
-                plt.show()
-            if log_wandb:
-                wandb.log({f"{pt}_standard_loss_histogram": wandb.Image(plt)})  # Log to wandb
-            plt.close()
+                print("~~~~~~~~ Problem Type:", pt, "~~~~~~~~")
+            if test_baseline != 2:
+                plt.hist(testing_losses_per_pt_SYM[pt], bins=75)
+                plt.xlabel("Loss")
+                plt.title(f"{pt} Symbolic Loss Histogram")
+                if testing_verbose:
+                    plt.show()
+                if log_wandb:
+                    wandb.log({f"{pt}_symbolic_loss_histogram": wandb.Image(plt)})  # Log to wandb
+                plt.close()
+
+            if test_baseline != 0:
+                plt.hist(testing_losses_per_pt_LLM[pt], bins=75)
+                plt.xlabel("Loss")
+                plt.title(f"{pt} Standard Loss Histogram")
+                if testing_verbose:
+                    plt.show()
+                if log_wandb:
+                    wandb.log({f"{pt}_standard_loss_histogram": wandb.Image(plt)})  # Log to wandb
+                plt.close()
 
     if generator.model.calculate_encoding_accuracy:
         average_accuracy_per_pt = {}
@@ -1176,9 +1192,9 @@ def run_experiment(generator, config):
                 average_accuracy_per_pt[pt][d][1] = np.mean(generator.model.encoding_accuracy[pt][d]["second_number"])*100
                 
                 curr_min = min(np.mean(generator.model.encoding_accuracy[pt][d]["first_number"])*100,
-                               np.mean(generator.model.encoding_accuracy[pt][d]["second_number"])*100)
+                            np.mean(generator.model.encoding_accuracy[pt][d]["second_number"])*100)
                 curr_max = max(np.mean(generator.model.encoding_accuracy[pt][d]["first_number"])*100,
-                               np.mean(generator.model.encoding_accuracy[pt][d]["second_number"])*100)
+                            np.mean(generator.model.encoding_accuracy[pt][d]["second_number"])*100)
 
                 if minval > curr_min:
                     minval = curr_min
@@ -1265,11 +1281,7 @@ def run_experiment(generator, config):
             file_path = f"{curr_dir}/outputs/score_per_problem_training_and_testing_{wandb.run.id}.txt"
 
         df = pd.read_csv(file_path)
-
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        else:
-            print(f"File {file_path} does not exist.")
+        #os.remove(file_path)
 
         df['training_item'] = [i for i in range(len(df) // len(generator.model.training_problems)) 
                                  for j in range(len(generator.model.training_problems))]
@@ -1352,6 +1364,7 @@ def initialize_default_config():
     temperature  = 0 # Temperature of LLM during training
 
     train_model              = True  # If false, then only do testing step
+    test_model               = True  # IF false, then only do training step
     lora_baseline            = False # If True,  instead of running symbolic encoder-decoder architecture, run a lora module
     starting_skip_strength   = 0.5   # The the starting strength of skip connections (0 is all symbolic, 1 is all LLM)
     problem_score_threshold  = 0.8   # If the similarity between the problem type is less than this value, don't us symbolic model
@@ -1407,6 +1420,8 @@ def initialize_default_config():
 
     limit_solution_digits       = True  # If True, certain problem types whose solutions have more digits than their inputs will have their solutions truncated (via solution mod 10^(complexity + 1))
     save_responses              = True  # If True, save the output information (model guesses, actual answers, losses) during training to file
+    simulate_perfect_encoder    = False # If True, bypass the encoder and copy the actual numbers related to the question into the symbolic algorithms
+    modify_question_format      = False # If True, modify the manner in which questions are asked (e.g., ask "What is 12 * 32" or "Multiply 12 and 32" instead of "What is 12 times 32")
 
     config = {
         'encoder_path'                        : encoder_path,
@@ -1418,6 +1433,7 @@ def initialize_default_config():
         'temperature'                         : temperature,
 
         'train_model'                         : train_model,
+        'test_model'                          : test_model,
         'lora_baseline'                       : lora_baseline,
         'starting_skip_strength'              : starting_skip_strength,
         'problem_score_threshold'             : problem_score_threshold,
@@ -1466,6 +1482,8 @@ def initialize_default_config():
 
         'limit_solution_digits'               : limit_solution_digits,
         'save_responses'                      : save_responses,
+        'simulate_perfect_encoder'            : simulate_perfect_encoder,
+        'modify_question_format'              : modify_question_format,
     }
 
 

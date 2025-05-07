@@ -14,6 +14,7 @@ complexity: 2
 temperature: 0
 
 train_model: true
+test_model: true
 lora_baseline: false
 starting_skip_strength: 0.5
 problem_score_threshold: 0.8
@@ -69,3 +70,4 @@ encode_counter: false
 limit_solution_digits: true
 save_responses: true
 simulate_perfect_encoder: false
+modify_question_format: false

@@ -6,7 +6,6 @@ import random
 import os
 import pandas as pd
 import sys
-import random
 import math
 import argparse
 from pathlib import Path
@@ -57,6 +56,7 @@ def generate_dialog(complexity=8, # complexity + 1 is the maximum number of digi
                     cot=False,  # If true, use CoT prompting
                     string_nums=False, # If true, represent numbers as words (e.g., two hundred and one)
                     limit_solution_digits=True, # If True, certain problem types whose solutions have more digits than their inputs will have their solutions truncated (via solution mod 10^(complexity + 1))
+                    modify_question_format=False, # If True, modify the manner in which questions are asked (e.g., ask "What is 12 * 32" or "Multiply 12 and 32" instead of "What is 12 times 32")
                     ):
     #x = np.random.randint(low=10**(complexity), high=10**(complexity+1), size=samples)
     x = np.random.randint(low=1, high=10**(complexity+1), size=samples)
@@ -133,9 +133,26 @@ def generate_dialog(complexity=8, # complexity + 1 is the maximum number of digi
                     {"role": "assistant", "content": f"{conv_inv(conv(example_x1) + conv(example_y1))}"},
                     {"role": "user", "content": f"What is {example_x2} plus {example_y2}?"},
                     {"role": "assistant", "content": f"{conv_inv(conv(example_x2) + conv(example_y2))}"},
-                    {"role": "user", "content": f"What is {x[n]} plus {y[n]}?"},
                 ]
 
+                if modify_question_format:
+                    # Define the list of different formats
+                    formats = [
+                        "{x} + {y}",
+                        "Work out {x} + {y}.",
+                        "Calculate {x} + {y}.",
+                        "What is {x} plus {y}?",
+                        "Add {x} and {y}.",
+                        "Sum of {x} and {y}.",
+                        "What is the sum of {x} and {y}?",
+                    ]
+                    # Randomly pick one format
+                    chosen_format = random.choice(formats)
+                    # Format the question
+                    question = chosen_format.format(x=x[n], y=y[n])
+                    dialog[n] += [{"role": "user", "content": question}]
+                else:
+                    dialog[n] += [{"role": "user", "content": f"What is {x[n]} plus {y[n]}?"},]
         elif problem_type == "multiplication":
             if cot:
                 if limit_solution_digits:
@@ -155,16 +172,46 @@ def generate_dialog(complexity=8, # complexity + 1 is the maximum number of digi
                         {"role": "assistant", "content": f"{conv_inv((conv(example_x1) * conv(example_y1)) % 10**(complexity+1))}"},
                         {"role": "user", "content": f"What is {example_x2} times {example_y2} mod {10**(complexity+1)}?"},
                         {"role": "assistant", "content": f"{conv_inv((conv(example_x2) * conv(example_y2)) % 10**(complexity+1))}"},
-                        {"role": "user", "content": f"What is {x[n]} times {y[n]} mod {10**(complexity+1)}?"},
                     ]
+
+                    if modify_question_format:
+                        # For modular multiplication, only slight variations make sense
+                        formats = [
+                            "What is {x} times {y} mod {mod}?",
+                            "Calculate {x} * {y} modulo {mod}.",
+                            "Work out {x} times {y} mod {mod}.",
+                            "Find the result of {x} multiplied by {y} modulo {mod}.",
+                        ]
+                        chosen_format = random.choice(formats)
+                        question = chosen_format.format(x=x[n], y=y[n], mod=10**(complexity+1))
+                        dialog[n] += [{"role": "user", "content": question}]
+                    else:
+                        dialog[n] += [{"role": "user", "content": f"What is {x[n]} times {y[n]} mod {10**(complexity+1)}?"}]
+
                 else:
                     dialog[n] += [
                         {"role": "user", "content": f"What is {example_x1} times {example_y1}?"},
                         {"role": "assistant", "content": f"{conv_inv((conv(example_x1) * conv(example_y1)))}"},
                         {"role": "user", "content": f"What is {example_x2} times {example_y2}?"},
                         {"role": "assistant", "content": f"{conv_inv((conv(example_x2) * conv(example_y2)))}"},
-                        {"role": "user", "content": f"What is {x[n]} times {y[n]}?"},
                     ]
+
+                    if modify_question_format:
+                        # For normal multiplication
+                        formats = [
+                            "{x} * {y}",
+                            "Work out {x} * {y}.",
+                            "Calculate {x} * {y}.",
+                            "What is {x} times {y}?",
+                            "Multiply {x} and {y}.",
+                            "Product of {x} and {y}.",
+                            "What is the product of {x} and {y}?",
+                        ]
+                        chosen_format = random.choice(formats)
+                        question = chosen_format.format(x=x[n], y=y[n])
+                        dialog[n] += [{"role": "user", "content": question}]
+                    else:
+                        dialog[n] += [{"role": "user", "content": f"What is {x[n]} times {y[n]}?"}]
 
 
         elif problem_type == "division":

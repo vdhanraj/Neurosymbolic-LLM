@@ -375,11 +375,15 @@ class Transformer(nn.Module):
                             print("Decoded problem type, max score, score above threshold:", problem_type_decoded, problem_type_score, use_symbolic_layer)
                             print("Score per problem type:", score_per_problem)
                         problem_type = problem_type_decoded[0] # Assume all items in the batch have the same decoded problem type in order to do effecient batch processing
-                        if self.record_score_per_problem == 2:
+
+                        if self.simulate_perfect_encoder:
+                            problem_type = self.curr_pt
+
+                        if self.record_score_per_problem == 1:
                             with open(f"{self.curr_dir}/outputs/score_per_problem_{self.wandb_run_id}.txt", "a") as file:
                                 for k in score_per_problem:
                                     file.write(problem_type + "," + k + "," + str(score_per_problem[k]) + "\n")
-                        if self.record_score_per_problem == 1:
+                        if self.record_score_per_problem == 2:
                             with open(f"{self.curr_dir}/outputs/score_per_problem_training_and_testing_{self.wandb_run_id}.txt", "a") as file:
                                 for k in score_per_problem:
                                     file.write(problem_type + "," + k + "," + str(score_per_problem[k]) + "\n")
@@ -581,6 +585,10 @@ class Transformer(nn.Module):
                             self.use_symbolic_layer = use_symbolic_layer
 
                         if self.calculate_encoding_accuracy:
+                            #print("Decoded n1:", decoded_n1)
+                            #print("Decoded n2:", decoded_n2)
+                            #print("Actual  n1:", self.curr_x)
+                            #print("Actual  n2:", self.curr_y)
                             for k in range(_bsz):
                                 for digit in range(self.complexity + 1):
                                     self.encoding_accuracy[problem_type]["digit " + str(digit)]["first_number"]  += [str(int(decoded_n1[k])).zfill(self.complexity+1)[::-1][digit] == str(self.curr_x[k]).zfill(self.complexity+1)[::-1][digit]]
