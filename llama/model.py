@@ -21,8 +21,6 @@ from llama.vsa_engine import SymbolicEngine, bind
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader, RandomSampler
 
-
-
 @dataclass
 class ModelArgs:
     dim: int = 4096

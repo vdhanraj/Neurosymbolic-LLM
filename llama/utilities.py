@@ -612,13 +612,25 @@ def get_dialog_indices(generator, dialog, calculate_end_index=False):
     return start_indices, end_indices
 
 
-def generate_and_save_data(generator, SE, save_dir, rounds, train, save_frequency, complexity, n_samples, problem_type,
+def generate_and_save_data(generator, SE, save_dir, rounds, mode, save_frequency, complexity, n_samples, problem_type, df_path="",
                            tokens_to_keep=1, calculate_end_index=False, verbose=True):
 
-    if train:
+    if df_path == "":
+        use_existing_questions = False
+    else:
+        df = pd.read_csv(df_path)
+        use_existing_questions = True
+        rounds = len(df) // n_samples
+        if not len(df) % n_samples:
+            print("Warning: size of predefined dataframe is not divisible by the LLM batch size. Some rows in the dataframe will not be processed")
+
+    if mode == "train":
         h_path  = 'h_stack_round_'
         sp_path = 'correct_sps_round_'
-    else:
+    elif mode == "val":
+        h_path  = 'validation_h_stack_round_'
+        sp_path = 'validation_correct_sps_round_'
+    elif mode == "test":
         h_path  = 'testing_h_stack_round_'
         sp_path = 'testing_correct_sps_round_'
 
@@ -648,8 +660,19 @@ def generate_and_save_data(generator, SE, save_dir, rounds, train, save_frequenc
             if r == rounds:
                 break
 
-        # Generate dialog data and gather 'h_stack' and 'correct_sps'
-        dialog_data = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type)
+        if use_existing_questions:
+            batch = df.iloc[r * n_samples : (r + 1) * n_samples]
+            question, problem_type = batch["question"], batch["problem_type"]
+            x, y, solution         = batch["x"], batch["y"], batch["solution"]
+
+            dialog_data = [generate_dialog(complexity=complexity, samples=1,
+                                        problem_type=pt) for pt in problem_type]
+            for d in range(len(dialog_data)):
+                dialog_data[d][0][0][-1]['content'] = question[d]
+                dialog_data[d][1][0], dialog_data[d][2][0] = x[d], y[d]
+        else:
+            # Generate dialog data and gather 'h_stack' and 'correct_sps'
+            dialog_data = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type)
         h_stack, correct_sps = gather_h_stacks(generator, SE, dialog_data)
         # shape of h_stack is n_layers, batch, num_tokens, hiddem_dim.
         

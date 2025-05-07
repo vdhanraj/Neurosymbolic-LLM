@@ -83,6 +83,7 @@ parser.add_argument("--possible_problems", nargs="+", type=str, default=config_d
 
 # === Data generation ===
 parser.add_argument("--train_data_rounds", type=int, default=config_defaults.get("train_data_rounds"), help="Number of training queries to LLM")
+parser.add_argument("--val_data_rounds", type=int, default=config_defaults.get("val_data_rounds"), help="Number of validation queries to LLM")
 parser.add_argument("--test_data_rounds", type=int, default=config_defaults.get("test_data_rounds"), help="Number of test queries to LLM")
 parser.add_argument("--restrict_train_dataset", type=int, default=config_defaults.get("restrict_train_dataset"), help="Number of queries to load to train encoders and decoders")
 parser.add_argument("--restrict_test_dataset", type=int, default=config_defaults.get("restrict_test_dataset"), help="Number of queries to load to test encoders and decoders")
@@ -107,11 +108,15 @@ parser.add_argument("--decoding_epochs", type=int, default=config_defaults.get("
 parser.add_argument("--decoding_learning_rate", type=float, default=config_defaults.get("decoding_learning_rate"), help="Base learning rate for decoder")
 parser.add_argument("--decoding_learning_rate_reduction_factors", type=json.loads, default=config_defaults.get("decoding_learning_rate_reduction_factors"), help="Epoch:Factor map for reducing decoder LR")
 
+parser.add_argument("--training_data_df_path", type=str, default=config_defaults.get("training_data_df_path"), help="Path to pre-generated training dataset (leave as '' to run based on randomly sampled data)")
+parser.add_argument("--val_data_df_path", type=str, default=config_defaults.get("val_data_df_path"), help="Path to pre-generated validation dataset (leave as '' to run based on randomly sampled data)")
+parser.add_argument("--testing_data_df_path", type=str, default=config_defaults.get("testing_data_df_path"), help="Path to pre-generated testing dataset (leave as '' to run based on randomly sampled data)")
+
 args = parser.parse_args(remaining_argv)
 
 # --- Step 5: Expand and assign ---
 curr_dir       = str(Path(args.curr_dir).expanduser())
-git_dir        = str(Path(args.git_dir).expanduser())
+git_dir        = str(Path(args.git_dir ).expanduser())
 ckpt_dir       = str(Path(args.chpt_dir).expanduser())
 tokenizer_path = str(Path(args.tokenizer_path).expanduser())
 generate_data  = args.generate_data
@@ -134,6 +139,7 @@ possible_problems  = args.possible_problems
 
 # Data collection
 train_data_rounds      = args.train_data_rounds
+val_data_rounds        = args.val_data_rounds
 test_data_rounds       = args.test_data_rounds
 restrict_train_dataset = args.restrict_train_dataset
 restrict_test_dataset  = args.restrict_test_dataset
@@ -157,6 +163,11 @@ train_freq_print                         = args.train_freq_print
 decoding_training_epochs                 = args.decoding_epochs
 decoding_learning_rate                   = args.decoding_learning_rate
 decoding_learning_rate_reduction_factors = args.decoding_learning_rate_reduction_factors
+
+training_data_df_path = str(Path(args.training_data_df_path).expanduser())
+val_data_df_path      = str(Path(args.val_data_df_path).expanduser())
+testing_data_df_path  = str(Path(args.testing_data_df_path).expanduser())
+
 
 ######################################################
 
@@ -236,14 +247,20 @@ os.makedirs(save_dir, exist_ok=True)
 
 if generate_data:
     generate_and_save_data(generator=generator, SE=SE, save_dir=save_dir, 
-                           rounds=train_data_rounds, train=True,  save_frequency=save_frequency,
-                           complexity=complexity, n_samples=n_samples, problem_type=problem_type,
+                           rounds=train_data_rounds, mode="train",  save_frequency=save_frequency,
+                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_path=training_data_df_path,
                            tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
     print("Training data gathering completed and saved to disk.")
 
     generate_and_save_data(generator=generator, SE=SE, save_dir=save_dir, 
-                           rounds=test_data_rounds,  train=False, save_frequency=save_frequency,
-                           complexity=complexity, n_samples=n_samples, problem_type=problem_type,
+                           rounds=val_data_rounds,  mode="val", save_frequency=save_frequency,
+                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_path=val_data_df_path,
+                           tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
+    print("Validation data gathering completed and saved to disk.")
+
+    generate_and_save_data(generator=generator, SE=SE, save_dir=save_dir, 
+                           rounds=test_data_rounds,  mode="test", save_frequency=save_frequency,
+                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_path=testing_data_df_path,
                            tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
     print("Testing data gathering completed and saved to disk.")
 

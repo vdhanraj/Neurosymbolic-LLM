@@ -34,6 +34,7 @@ possible_problems:
 
 # === Data Collection ===
 train_data_rounds: 10000
+val_data_rounds: 1000
 test_data_rounds: 1000
 restrict_train_dataset: 10000
 restrict_testdataset: 1000
@@ -74,3 +75,7 @@ decoding_learning_rate_reduction_factors:
   25: 0.5
   100: 0.5
   250: 0.4
+
+training_data_df_path: "~/Symbolic-Math-Dataset/datasets/symbolic_math_dataset_2_complexity_10000_training_samples.csv"
+val_data_df_path: "~/Symbolic-Math-Dataset/datasets/symbolic_math_dataset_2_complexity_100_validation_samples.csv"
+testing_data_df_path: "~/Symbolic-Math-Dataset/datasets/symbolic_math_dataset_2_complexity_1000_testing_samples.csv"

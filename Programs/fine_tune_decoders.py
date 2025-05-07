@@ -343,7 +343,6 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
                       "first number:", x[i], "second number:", y[i], 
                       curr_problem_type + ":", correct_responses[i],
                       "LLM response:", output, "score:", score)
-                
 
 
     max_len = max(t.size(0) for t in all_logits)
