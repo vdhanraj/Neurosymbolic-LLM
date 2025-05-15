@@ -86,6 +86,7 @@ parser.add_argument("--train_data_rounds", type=int, default=config_defaults.get
 parser.add_argument("--val_data_rounds", type=int, default=config_defaults.get("val_data_rounds"), help="Number of validation queries to LLM")
 parser.add_argument("--test_data_rounds", type=int, default=config_defaults.get("test_data_rounds"), help="Number of test queries to LLM")
 parser.add_argument("--restrict_train_dataset", type=int, default=config_defaults.get("restrict_train_dataset"), help="Number of queries to load to train encoders and decoders")
+parser.add_argument("--restrict_val_dataset", type=int, default=config_defaults.get("restrict_val_dataset"), help="Number of queries to load to validation encoders and decoders")
 parser.add_argument("--restrict_test_dataset", type=int, default=config_defaults.get("restrict_test_dataset"), help="Number of queries to load to test encoders and decoders")
 parser.add_argument("--save_frequency", type=int, default=config_defaults.get("save_frequency"), help="Save hidden/VSA data every N batches")
 parser.add_argument("--layer_numbers", type=int, nargs="+", default=config_defaults.get("layer_numbers"), help="Layers to train encoders/decoders for")
@@ -142,6 +143,7 @@ train_data_rounds      = args.train_data_rounds
 val_data_rounds        = args.val_data_rounds
 test_data_rounds       = args.test_data_rounds
 restrict_train_dataset = args.restrict_train_dataset
+restrict_val_dataset   = args.restrict_val_dataset
 restrict_test_dataset  = args.restrict_test_dataset
 save_frequency         = args.save_frequency
 layer_numbers          = torch.tensor(args.layer_numbers)
@@ -164,9 +166,9 @@ decoding_training_epochs                 = args.decoding_epochs
 decoding_learning_rate                   = args.decoding_learning_rate
 decoding_learning_rate_reduction_factors = args.decoding_learning_rate_reduction_factors
 
-training_data_df_path = str(Path(args.training_data_df_path).expanduser())
-val_data_df_path      = str(Path(args.val_data_df_path).expanduser())
-testing_data_df_path  = str(Path(args.testing_data_df_path).expanduser())
+training_data_df_path = str(Path(args.training_data_df_path).expanduser()) if args.training_data_df_path else ''
+val_data_df_path      = str(Path(args.val_data_df_path).expanduser()) if args.val_data_df_path else ''
+testing_data_df_path  = str(Path(args.testing_data_df_path).expanduser()) if args.testing_data_df_path else ''
 
 
 ######################################################
@@ -231,9 +233,11 @@ possible_problems_str = "_".join(possible_problems)
 if os.path.exists(f"{curr_dir}/VSA_library/symbolic_engine_VSA_dim_{VSA_dim}_max_digits_{max_digits}_problem_types_{possible_problems_str}.pt"):
     SE = torch.load(f"{curr_dir}/VSA_library/symbolic_engine_VSA_dim_{VSA_dim}"
                     f"_max_digits_{max_digits}_problem_types_{possible_problems_str}.pt", weights_only=False)
+    print("Using pre-existing Semantic Engine object")
 else:
     SE = SymbolicEngine(VSA_dim=VSA_dim, max_digits=max_digits, possible_problems=possible_problems, 
                         curr_dir=curr_dir)
+    print("Creating and saving new existing Semantic Engine object")
     torch.save(SE, f"{curr_dir}/VSA_library/symbolic_engine_VSA_dim_{VSA_dim}_max_digits_{max_digits}_problem_types_{possible_problems_str}.pt")
 
 if type(problem_type) == type([]):
@@ -241,35 +245,85 @@ if type(problem_type) == type([]):
 else:
     problem_str = problem_type
 
+if training_data_df_path:
+    print("training_data_df_path:",training_data_df_path)
+    df_train = pd.read_csv(training_data_df_path)
+    train_data_rounds = len(df_train) // n_samples
+    print("Set number of training rounds to:", train_data_rounds)
+    if train_data_rounds % save_frequency:
+        print("Warning: number of training rounds is not divisible by save_frequency. This will cause an error during dataset generation. Exiting...")
+        sys.exit()
+
+    if len(df_train) % n_samples:
+        print(f"Warning: size of predefined training dataframe ({len(df_train)}) is not divisible by the LLM batch size ({n_samples}). Some rows in the dataframe will not be processed")
+else:
+    df_train = None
+
+if val_data_df_path:
+    df_val = pd.read_csv(val_data_df_path)
+    val_data_rounds = len(df_val) // n_samples
+    print("Set number of validation rounds to:", val_data_rounds)
+    if val_data_rounds % save_frequency:
+        print("Warning: number of validation rounds is not divisible by save_frequency. This will cause an error during dataset generation. Exiting...")
+        sys.exit()
+
+    if len(df_val) % n_samples:
+        print(f"Warning: size of predefined validation dataframe ({len(df_val)}) is not divisible by the LLM batch size ({n_samples}). Some rows in the dataframe will not be processed")
+else:
+    df_val = None
+
+if testing_data_df_path:
+    df_test = pd.read_csv(testing_data_df_path)
+    test_data_rounds = len(df_test) // n_samples
+    print("Set number of testing rounds to:", test_data_rounds)
+    if test_data_rounds % save_frequency:
+        print("Warning: number of testing rounds is not divisible by save_frequency. This will cause an error during dataset generation. Exiting...")
+        sys.exit()
+
+    if len(df_test) % n_samples:
+        print(f"Warning: size of predefined testing dataframe ({len(df_test)}) is not divisible by the LLM batch size ({n_samples}). Some rows in the dataframe will not be processed")
+else:
+    df_test = None
+
+
 # Output directory to write and read saved hidden state and VSA data to
-save_dir = f"{curr_dir}/gathered_data_{complexity}_complexity_{tokens_to_keep}_tokens_kept_{calculate_end_index}_calculating_end_index_{train_data_rounds}_train_rounds_{test_data_rounds}_test_rounds_{problem_str}"
+#save_dir = f"{curr_dir}/gathered_data-{complexity}_complexity-{tokens_to_keep}_tokens_kept-{calculate_end_index}_cei-{train_data_rounds}_train_rounds-{val_data_rounds}_val_rounds-{test_data_rounds}_test_rounds-{problem_str}"
+save_dir = f"gathered_data_{run_name}"
+
 os.makedirs(save_dir, exist_ok=True)
+print("Data will be saved and read from:", save_dir)
 
 if generate_data:
     generate_and_save_data(generator=generator, SE=SE, save_dir=save_dir, 
                            rounds=train_data_rounds, mode="train",  save_frequency=save_frequency,
-                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_path=training_data_df_path,
+                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_subset=df_train,
                            tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
     print("Training data gathering completed and saved to disk.")
 
     generate_and_save_data(generator=generator, SE=SE, save_dir=save_dir, 
                            rounds=val_data_rounds,  mode="val", save_frequency=save_frequency,
-                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_path=val_data_df_path,
+                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_subset=df_val,
                            tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
     print("Validation data gathering completed and saved to disk.")
 
     generate_and_save_data(generator=generator, SE=SE, save_dir=save_dir, 
                            rounds=test_data_rounds,  mode="test", save_frequency=save_frequency,
-                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_path=testing_data_df_path,
+                           complexity=complexity, n_samples=n_samples, problem_type=problem_type, df_subset=df_test,
                            tokens_to_keep=tokens_to_keep, calculate_end_index=calculate_end_index, verbose=True)
     print("Testing data gathering completed and saved to disk.")
 
 if not generate_data:
-    training_encoder_data_loaders = generate_data_loaders(train=True, save_dir=save_dir, data_rounds=train_data_rounds, 
+    training_encoder_data_loaders = generate_data_loaders(mode='train', save_dir=save_dir, data_rounds=train_data_rounds, n_samples=n_samples, df_subset=df_train,
                                                           save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=restrict_train_dataset, 
                                                           tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, verbose=True)
     print("Training data loaders for each layer have been created.")
-    testing_encoder_data_loaders = generate_data_loaders(train=False, save_dir=save_dir, data_rounds=test_data_rounds, 
+
+    validation_encoder_data_loaders = generate_data_loaders(mode='val', save_dir=save_dir, data_rounds=val_data_rounds, n_samples=n_samples, df_subset=df_val,
+                                                            save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=restrict_val_dataset, 
+                                                            tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, verbose=True)
+    print("Validation data loaders for each layer have been created.")
+
+    testing_encoder_data_loaders = generate_data_loaders(mode='test', save_dir=save_dir, data_rounds=test_data_rounds, n_samples=n_samples, df_subset=df_test,
                                                          save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=restrict_test_dataset, 
                                                          tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, verbose=True)
     print("Testing data loaders for each layer have been created.")
@@ -287,7 +341,8 @@ if not generate_data:
 
     optimizers   = [optim.Adam(encoders[n].parameters(), lr=learning_rate) for n in range(len(layer_numbers))]
     criterion = nn.MSELoss()
-    losses = np.zeros((len(layer_numbers), training_epochs))
+    losses     = np.zeros((len(layer_numbers), training_epochs))
+    val_losses = np.zeros((len(layer_numbers), training_epochs))
     running_losses = np.zeros((len(layer_numbers)))
     for i in range(training_epochs):
         if i in learning_rate_reduction_factors.keys():
@@ -316,45 +371,90 @@ if not generate_data:
             running_losses[n] = running_loss
             total_norm   /= (batch_idx + 1)
             losses[n][i] = running_loss
+
+            v_predictions = []
+            v_targets     = []
+
+            encoders.eval()
+
+            running_loss = 0
+            with torch.no_grad():
+                for batch_idx, (data, labels) in enumerate(validation_encoder_data_loaders[n]):
+                    model_pred = encoders[n](data)
+                    loss = torch.sqrt(criterion(model_pred, labels))
+                    v_predictions += [model_pred]
+                    v_targets     += [labels]
+                    running_loss  += loss.item()
+
+            running_loss /= (batch_idx + 1)
+            val_losses[n][i] = running_loss
+
+            v_predictions = torch.cat(v_predictions, dim=0)
+            v_targets     = torch.cat(v_targets, dim=0)
+
+            v_digit_predictions_n1 = SE.decode_digits(v_predictions.type_as(SE.vectors[SE.VSA_n1]), SE.VSA_n1)
+            v_digit_labels_n1      = SE.decode_digits(v_targets.    type_as(SE.vectors[SE.VSA_n1]), SE.VSA_n1)
+            v_digit_predictions_n2 = SE.decode_digits(v_predictions.type_as(SE.vectors[SE.VSA_n2]), SE.VSA_n2)
+            v_digit_labels_n2      = SE.decode_digits(v_targets.    type_as(SE.vectors[SE.VSA_n2]), SE.VSA_n2)
+
+            average_correct_digits = ((v_digit_predictions_n1 == v_digit_labels_n1).sum(axis=1).float().mean().detach().cpu().item() + 
+                                      (v_digit_predictions_n2 == v_digit_labels_n2).sum(axis=1).float().mean().detach().cpu().item()) / 2
+
+            error_per_digit = ((v_digit_predictions_n1 == v_digit_labels_n1).sum(axis=0).detach().cpu() / len(v_digit_predictions_n1) + 
+                               (v_digit_predictions_n2 == v_digit_labels_n2).sum(axis=0).detach().cpu() / len(v_digit_predictions_n2)) / 2
+
+            if not i % train_freq_print:
+                print(f"    └─ L{n_layer}:, validation average correct digits: {average_correct_digits}, validation accuracy per digit: {error_per_digit}")
+
+            encoders.train()
+
         if not i % train_freq_print:
-            print("Epoch:", i, "Running Loss:", running_losses.mean(), f"\tTotal gradient norm: {total_norm}")
+            print("Epoch:", i, f"Running Loss: {running_losses.mean()}\t Validation Loss: {val_losses[:,i].mean()}\tTotal gradient norm: {total_norm}\t")
 
     plt.plot(losses.mean(axis=0)[:i], marker=".")
-    plt.title("Average RMSE Loss Per Epoch")
+    plt.plot(val_losses.mean(axis=0)[:i], marker=".")
+    plt.title("Average Encoder RMSE Loss Per Epoch")
     plt.ylabel("RMSE")
     plt.xlabel("Epoch")
+    plt.legend(['Training Data', 'Validation Data'])
     if log_wandb:
-        wandb.log({f"Average RMSE Loss Per Epoch": wandb.Image(plt)})
+        wandb.log({f"Average Encoder RMSE Loss Per Epoch": wandb.Image(plt)})
     else:
         plt.show()
     plt.close()
-            
+
 
     plt.plot(losses.T[:i].mean(axis=0), marker=".")
+    plt.plot(val_losses.T[:i].mean(axis=0), marker=".")
     x_ticks = np.arange(0, len(losses.T.mean(axis=0)[:-1]), 1)
     plt.xticks(x_ticks, rotation=75)
-    plt.title("Average RMSE Loss vs Layer Number")
-    plt.ylabel("Average RMSE Loss")
+    plt.title("Average Encoder RMSE Loss vs Layer Number")
+    plt.ylabel("Average Encoder RMSE Loss")
     plt.xlabel("Layer Number")
+    plt.legend(['Training Data', 'Validation Data'])
     if log_wandb:
-        wandb.log({f"Average RMSE Loss vs Layer Number": wandb.Image(plt)})
+        wandb.log({f"Average Encoder RMSE Loss vs Layer Number": wandb.Image(plt)})
     else:
         plt.show()
     plt.close()
 
     plt.plot(losses.T[i], marker=".")
+    plt.plot(val_losses.T[i], marker=".")
     x_ticks = np.arange(0, len(losses.T.mean(axis=0)[:-1]), 1)
     plt.xticks(x_ticks, rotation=75)
-    plt.title("Final RMSE Loss vs Layer Number")
-    plt.ylabel("Final RMSE Loss")
+    plt.title("Final Encoder RMSE Loss vs Layer Number")
+    plt.ylabel("Final Encoder RMSE Loss")
     plt.xlabel("Layer Number")
+    plt.legend(['Training Data', 'Validation Data'])
     if log_wandb:
-        wandb.log({f"Final RMSE Loss vs Layer Number": wandb.Image(plt)})
+        wandb.log({f"Final Encoder RMSE Loss vs Layer Number": wandb.Image(plt)})
     else:
         plt.show()
     plt.close()
 
     ####################################################################################################
+
+    print("Decoder training starting")
 
     for n, n_layer in enumerate(layer_numbers):
         for param in encoders[n].parameters():
@@ -369,9 +469,10 @@ if not generate_data:
         decoders.append(layer_decoder)#, dtype=torch.float32))
 
 
-    decoding_optimizers   = [optim.Adam(decoders[n].parameters(), lr=decoding_learning_rate) for n in range(len(layer_numbers))]
-    decoding_criterion = nn.MSELoss()
-    decoding_losses = np.zeros((len(layer_numbers), decoding_training_epochs))
+    decoding_optimizers = [optim.Adam(decoders[n].parameters(), lr=decoding_learning_rate) for n in range(len(layer_numbers))]
+    decoding_criterion  = nn.MSELoss()
+    decoding_losses     = np.zeros((len(layer_numbers), decoding_training_epochs))
+    val_decoding_losses = np.zeros((len(layer_numbers), decoding_training_epochs))
     decoding_running_losses = np.zeros((len(layer_numbers)))
     for j in range(decoding_training_epochs):
         if j in decoding_learning_rate_reduction_factors.keys():
@@ -383,13 +484,9 @@ if not generate_data:
             total_norm = 0.0
             for batch_idx, (data, labels) in enumerate(training_encoder_data_loaders[n]):
                 latent_representation = encoders[n](data)
-                
-                #std = torch.exp(0.5 * latent_logvar)  # Compute standard deviation
-                #epsilon = torch.randn_like(std)      # Sample noise
-                #latent_representation = latent_representation + epsilon
 
                 predicted_hidden_state = decoders[n](latent_representation)
-                
+
                 if tokens_to_keep != 1:
                     target = data[:,-1,:]
                 else:
@@ -410,14 +507,35 @@ if not generate_data:
             decoding_running_losses[n] = decoding_running_loss
             total_norm   /= (batch_idx + 1)
             decoding_losses[n][j] = decoding_running_loss
+
+            val_decoding_running_loss = 0
+
+            for batch_idx, (data, labels) in enumerate(validation_encoder_data_loaders[n]):
+                latent_representation = encoders[n](data)
+
+                predicted_hidden_state = decoders[n](latent_representation)
+
+                if tokens_to_keep != 1:
+                    target = data[:,-1,:]
+                else:
+                    target = data
+
+                loss = torch.sqrt(criterion(predicted_hidden_state, target))
+                val_decoding_running_loss += loss.item()
+
+            val_decoding_running_loss /= (batch_idx + 1)
+            val_decoding_losses[n][j] = val_decoding_running_loss
+
         if not j % train_freq_print and j:
-            print("Epoch:", j, "Running Loss:", decoding_running_losses.mean(), f"\tTotal gradient norm: {total_norm}")
+            print("Epoch:", j, f"Running Loss: {decoding_running_losses.mean()}\t Validation Loss: {val_decoding_losses[:,j].mean()}\tTotal gradient norm: {total_norm}\t")
 
 
     plt.plot(decoding_losses.mean(axis=0)[:j], marker=".")
+    plt.plot(val_decoding_losses.mean(axis=0)[:j], marker=".")
     plt.title("Average Decoder RMSE Loss Per Epoch")
     plt.ylabel("RMSE")
     plt.xlabel("Epoch")
+    plt.legend(['Training Data', 'Validation Data'])
     if log_wandb:
         wandb.log({f"Average Decoder RMSE Loss Per Epoch": wandb.Image(plt)})
     else:
@@ -425,11 +543,13 @@ if not generate_data:
     plt.close()
 
     plt.plot(decoding_losses.T[:j].mean(axis=0), marker=".")
+    plt.plot(val_decoding_losses.T[:j].mean(axis=0), marker=".")
     x_ticks = np.arange(0, len(decoding_losses.T.mean(axis=0)[:-1]), 1)
     plt.xticks(x_ticks, rotation=75)
     plt.title("Average Decoder RMSE Loss vs Layer Number")
     plt.ylabel("Average RMSE Loss")
     plt.xlabel("Layer Number")
+    plt.legend(['Training Data', 'Validation Data'])
     if log_wandb:
         wandb.log({f"Average Decoder RMSE Loss vs Layer Number": wandb.Image(plt)})
     else:
@@ -437,11 +557,13 @@ if not generate_data:
     plt.close()
 
     plt.plot(decoding_losses.T[j], marker=".")
+    plt.plot(val_decoding_losses.T[j], marker=".")
     x_ticks = np.arange(0, len(decoding_losses.T.mean(axis=0)[:-1]), 1)
     plt.xticks(x_ticks, rotation=75)
     plt.title("Final Decoder RMSE Loss vs Layer Number")
     plt.ylabel("Final RMSE Loss")
     plt.xlabel("Layer Number")
+    plt.legend(['Training Data', 'Validation Data'])
     if log_wandb:
         wandb.log({f"Final Decoder RMSE Loss vs Layer Number": wandb.Image(plt)})
     else:
@@ -463,7 +585,7 @@ if not generate_data:
     print("Running Error Statistics for Testing Data")
 
     #errors_per_pt = {layer_num.item() : {pt: [] for pt in possible_problems} for n, layer_num in enumerate(layer_numbers)}
-    errors_per_pt = {pt: {layer_num.item(): [] for n, layer_num in enumerate(layer_numbers)} for pt in problem_type}
+    errors_per_pt = {pt: {layer_num.item(): [] for n, layer_num in enumerate(layer_numbers)} for pt in possible_problems}
 
     VSA_predictions = []
     label_VSAs      = []
@@ -566,8 +688,8 @@ if not generate_data:
             'Hundred Millions Digit Error Rate',
             ]
     markers = ["o", "s", "^", 
-            ".", "v", "*", 
-            "<", ">", "1"]
+               ".", "v", "*", 
+               "<", ">", "1"]
 
     for n, digit in enumerate(per_digit_errors.float().cpu().numpy().T):
         plt.plot(layer_numbers.cpu(), digit, label=labels[n], marker=markers[n])
@@ -589,7 +711,7 @@ if not generate_data:
     
     print("Running Error Statistics for Training Data")
 
-    errors_per_pt = {pt: {layer_num.item(): [] for n, layer_num in enumerate(layer_numbers)} for pt in problem_type}
+    errors_per_pt = {pt: {layer_num.item(): [] for n, layer_num in enumerate(layer_numbers)} for pt in possible_problems}
 
     VSA_predictions = []
     label_VSAs      = []

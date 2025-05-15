@@ -205,8 +205,16 @@ class SymbolicEngine():
             self.vocabulary["VSA_number_" + str(i)] = num_VSA
             self.numbers[str(i)] = num_VSA
 
+        self.digit_values = []
+        for d in range(self.max_digits):
+            self.digit_values += [self.vocabulary["VSA_" + str(10**d)]]
 
-    def generate_VSA(self, num1, num2, problem_type="addition", single_number_generation=False): # num1, num2 are integers
+        self.digit_values = torch.stack(self.digit_values).squeeze(1)
+
+        self.numbers = torch.stack(list(self.numbers.values())).squeeze(1)
+
+
+    def generate_VSA_old(self, num1, num2, problem_type="addition", single_number_generation=False): # num1, num2 are integers
         nums1_coefs = [int(i) for i in list(str(num1))][::-1]
 
         total_VSA1 = torch.zeros((1, self.VSA_dim)).float()
@@ -242,6 +250,72 @@ class SymbolicEngine():
 
         return final_VSA
 
+    def generate_VSA(self, num1, num2, problem_types=["addition"], single_number_generation=False):
+        # Inputs
+        # num1                     : tensor of size (batch) and type int
+        # num2                     : tensor of size (batch) and type int
+        # problem_types            : list of strings of size (batch)
+        # single_number_generation : boolean
+
+        num1_coefs = []
+        for i in range(self.max_digits):
+            num1_coefs += [num1 % 10 ** (i + 1) // 10 ** i]
+        num1_coefs = torch.stack(num1_coefs).T
+
+        batch, max_digits  = num1_coefs.shape
+        VSA_dim            = self.numbers.shape[1]
+
+        # 1. Look‑up the “number” vectors for every (row, column)
+        # Advanced indexing broadcasts num1_coefs into the first two dims.
+        # Result : (batch, max_digits, VSA_dim)
+        num_vecs = self.numbers[num1_coefs]
+
+        # 2. Fetch the positional (“digit”) vectors and broadcast to batch
+        #           (max_digits, VSA_dim)          →    (batch, max_digits, VSA_dim)
+        digit_vecs = self.digit_values.unsqueeze(0).expand(batch, -1, -1)
+
+        # 3. Bind element‑wise
+        # Flatten to (N, VSA_dim) so it matches bind’s expected signature
+        N = batch * max_digits
+        bound_flat = bind(num_vecs.reshape(N, VSA_dim),
+                          digit_vecs.reshape(N, VSA_dim))
+
+        # Back to (batch, max_digits, VSA_dim)
+        bound = bound_flat.view(batch, max_digits, VSA_dim)
+
+        # 4. Bundle across all digit positions so each sample
+        #    ends up with a single VSA vector
+        encoding1 = bound.sum(dim=1)          # shape: (batch, VSA_dim)
+
+        # Repeat process for num2, if single_number_generation is False
+        if not single_number_generation:
+            num2_coefs = []
+            for i in range(self.max_digits):
+                num2_coefs += [num2 % 10 ** (i + 1) // 10 ** i]
+            num2_coefs = torch.stack(num2_coefs).T
+
+            batch, max_digits  = num2_coefs.shape
+            VSA_dim            = self.numbers.shape[1]
+
+            num_vecs = self.numbers[num2_coefs]
+
+            digit_vecs = self.digit_values.unsqueeze(0).expand(batch, -1, -1)
+
+            N = batch * max_digits
+            bound_flat = bind(num_vecs.reshape(N, VSA_dim),
+                            digit_vecs.reshape(N, VSA_dim))
+
+            bound = bound_flat.view(batch, max_digits, VSA_dim)
+
+            encoding2 = bound.sum(dim=1)
+
+            final_VSA = bind(encoding1, self.vectors[self.VSA_n1]) + bind(encoding2, self.vectors[self.VSA_n2]) + torch.stack([self.vocabulary[pt] for pt in problem_types]).squeeze(1)
+        else:
+            final_VSA = encoding1
+        
+        return final_VSA
+
+
     def decode_VSA(self, VSA, VSA_n=None, differentiable=False, similarity_threshold=0.5, T=0.01, exp_scalar=100, k=100):
         if VSA_n:
             n = bind(VSA, self.inverse_vectors[VSA_n])
@@ -253,7 +327,7 @@ class SymbolicEngine():
 
         # Bind the above query with the VSA for each number (size of this is batch x unique_numbers x VSA_dim)
         # Output is batch x unique_numbers x num_digits (this indicates the vector similarity per digit of each number)
-        vs = (torch.stack(list(self.numbers.values())).reshape(-1, len(self.numbers), self.VSA_dim) @ query.T)
+        vs = (self.numbers @ query.mT).mT
         batch_size = vs.shape[0]
 
         if differentiable:
@@ -298,12 +372,14 @@ class SymbolicEngine():
     # Make sure similarity_threshold is picked such that the correct number has a score greater than this threshold, and everything 
     #  else is smaller than the threshold
     def query_digit(self, VSA, d, similarity_threshold=0.5, T=0.01, exp_scalar=100, k=100, differentiable=False):
-        # Bind the input VSA with each inverse VSA for each digit. Output is num_digits x VSA_dim
+        # VSA shape should be batch_size x VSA_dim
+
+        # Bind the input VSA with the inverse VSA for the given digit. Output is batch_size x VSA_dim
         query = bind(VSA, self.inverse_vectors[self.digits[d]])
 
-        # Bind the above query with the VSA for each number (size of this is batch x unique_numbers x VSA_dim)
-        # Output is batch x num_digits (this indicates the vector similarity per digit of each number)
-        vs = (torch.stack(list(self.numbers.values())).reshape(-1, len(self.numbers), self.VSA_dim) @ query.mT).mT.squeeze(0)
+        # Bind the above query with the VSA for each number (size of this is unique_numbers x VSA_dim)
+        # Output is batch x unique_numbers (this indicates the vector similarity of each number)
+        vs = (self.numbers @ query.mT).mT
 
         if differentiable:
             digit_values = torch.softmax(vs/T, dim=1)
@@ -322,10 +398,10 @@ class SymbolicEngine():
 
     def decode_digits(self, VSA, n=0, verbose=False, differentiable=False):
         if n == 0: 
-            n == self.VSA_n1
+            n = self.VSA_n1
         decoded_values = []
         for d in self.digits.keys():
-            dv = (self.query_digit(bind(VSA, self.inverse_vectors[n].cuda()), d, differentiable=differentiable))
+            dv = (self.query_digit(bind(VSA, self.inverse_vectors[n]), d, differentiable=differentiable))
             if verbose:
                 print(d, '\t', round(dv, 3))
             decoded_values += [dv]
@@ -373,12 +449,15 @@ class SymbolicEngine():
         for p in problem_subset:
             problem_type_VSAs += [self.vocabulary[p].flatten()]
         problem_type_VSAs = torch.stack(problem_type_VSAs)
-        problem_type_maxima = (problem_type_VSAs @ VSA_curr.T.float()).T.max(axis=1)
+        problem_type_similarity = (problem_type_VSAs @ VSA_curr.T.float()).T
+        problem_type_maxima = problem_type_similarity.max(axis=1)
         problem_type_labels = [problem_subset[i] for i in problem_type_maxima.indices]
         if verbose:
             print(problem_type_labels)
-        return np.array(problem_type_labels), problem_type_maxima.values.cpu().numpy(), (problem_type_VSAs @ VSA_curr.T.float()).T.cpu().numpy()
-    
+        # Return the problem type with the highest score per row, the similarity score of the highest score problem type, 
+        #  and the score of every problem type in problem_subset per row
+        return np.array(problem_type_labels), problem_type_maxima.values.cpu().numpy(), problem_type_similarity.cpu().numpy()
+
     def fractional_encode(self, x):
         return torch.fft.ifft((torch.fft.fft(self.vocabulary["VSA_x"])**x.view(-1, 1))).real
 

@@ -14,6 +14,7 @@ complexity: 2
 temperature: 0
 
 train_model: true
+validate_model: true
 test_model: true
 lora_baseline: false
 starting_skip_strength: 0.5
@@ -22,13 +23,14 @@ normalize_VSA_before_dot: false
 initialize_decoders: true
 normalize_vector: false
 rms_layer: false
-double_rep: true
+single_number_generation: true
 use_specific_identities: false
 trainable_skip: false
 symbolic_encoding_layer: 17
 symbolic_decoding_layers: [17]
 
-num_epochs: 1000
+num_epochs: 1
+num_steps: 1000
 n_samples: 2
 inference_to_backprop_ratio: 8
 learning_rate: 0.001
@@ -41,20 +43,27 @@ learning_rate_reduction_factors:
   6000: 0.5
   8000: 0.5
 
-epochs_to_print: 10
+steps_to_print: 10
 print_all_pts_freq: 100
 verbose: 0
 
+val_num_steps: 100
+val_inference_to_backprop_ratio: 1
+val_n_samples: 2
+val_temperature: 0
+val_steps_to_print: 0
+val_verbose: 0
+
 testing_problems: ["addition", "division", "multiplication", "modulo", "gcd", "lcm", "square_mod", "bitwise_and", "bitwise_xor", "bitwise_or"]
-testing_num_epochs: 100
+testing_num_steps: 100
 testing_inference_to_backprop_ratio: 1
 testing_n_samples: 2
 testing_temperature: 0
-testing_epochs_to_print: 0
+testing_steps_to_print: 0
 testing_verbose: 0
 record_score_per_problem: 2
 
-test_baseline: false
+test_baseline: 0
 cot: false
 test_on_unrelated_questions: false
 test_with_non_numerical_rep: false
@@ -71,3 +80,7 @@ limit_solution_digits: true
 save_responses: true
 simulate_perfect_encoder: false
 modify_question_format: false
+
+training_data_df_path: ""
+val_data_df_path: ""
+testing_data_df_path: ""

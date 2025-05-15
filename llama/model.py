@@ -281,7 +281,7 @@ class Transformer(nn.Module):
 
 
     @torch.inference_mode()
-    def forward(self, tokens: torch.Tensor, start_pos: int, curr_token=0, verbose=False):
+    def forward(self, tokens: torch.Tensor, start_pos: int, curr_token=0, curr_pt="addition", curr_x=0, curr_y=0, verbose=False):
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
         self.freqs_cis = self.freqs_cis.to(h.device)
@@ -312,7 +312,7 @@ class Transformer(nn.Module):
         return output, h_stack, h
 
     #@torch.inference_mode()
-    def forward_symbolic_funnel(self, tokens: torch.Tensor, start_pos: int, curr_token=0, verbose=False):
+    def forward_symbolic_funnel(self, tokens: torch.Tensor, start_pos: int, curr_token=0, curr_pt="addition", curr_x=0, curr_y=0, verbose=False):
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
 
@@ -360,237 +360,255 @@ class Transformer(nn.Module):
                 # If using lora baseline, simply set the output of the encoder to the input of the decoder without doing any symbolic computation
                 if self.lora_baseline:
                     final_symbol = symbolic_encoding
+                    use_symbolic_layer = torch.tensor([True for _ in range(_bsz)], device=h.device).view(-1, 1)
+                    print("Using LoRA")
                 else:
                     if not self.static_encoding or curr_token == 0: # Execute if the curr_token is 0, or if static_encoding is set to False (in which case you recalculate final_symbol during each forward pass)
                         problem_type_identity = {"addition": lambda x: 0, "multiplication": lambda x: 1,   "modulo":      lambda x: x+1, "gcd":         lambda x: x, 
                                                  "lcm":      lambda x: x, "square_mod":     lambda x: x+1, "bitwise_and": lambda x: x,   "bitwise_xor": lambda x: 0, "bitwise_or": lambda x: 0}
 
                         #print(symbolic_encoding.shape)
-                        problem_type_decoded, problem_type_score, score_per_problem = self.SE.decode_problem_type(symbolic_encoding, problem_subset=self.training_problems, normalize_VSA_before_dot=self.normalize_VSA_before_dot)
-                        score_per_problem = {self.training_problems[i]: score_per_problem[0][i] for i in range(len(score_per_problem[0]))} # Only print the first batch item
+                        # TODO: Change the problem_subset to be all problems when doing testing (i.e., when the actual problem type would not be included in the training_problems) # Done
+                        problem_type_decoded, problem_type_score, score_per_problem = self.SE.decode_problem_type(symbolic_encoding, problem_subset=self.SE.possible_problems, normalize_VSA_before_dot=self.normalize_VSA_before_dot)
+                        score_per_problem = [{self.SE.possible_problems[i]: spp[i] for i in range(len(spp))} for spp in score_per_problem]
                         use_symbolic_layer = torch.tensor([bool(i > self.problem_score_threshold) for i in problem_type_score], device=h.device).view(-1, 1) 
                         if verbose == 2:
                             print("Decoded problem type, max score, score above threshold:", problem_type_decoded, problem_type_score, use_symbolic_layer)
                             print("Score per problem type:", score_per_problem)
                         problem_type = problem_type_decoded[0] # Assume all items in the batch have the same decoded problem type in order to do effecient batch processing
+                        # TODO: Get this to work for when the batch has different problem types present. Current workaround is to make n_samples = 1 if you can't gaurentee that the batch has only 1 type of problem type
 
                         if self.simulate_perfect_encoder:
-                            problem_type = self.curr_pt
+                            problem_type = curr_pt
 
-                        if self.record_score_per_problem == 1:
-                            with open(f"{self.curr_dir}/outputs/score_per_problem_{self.wandb_run_id}.txt", "a") as file:
-                                for k in score_per_problem:
-                                    file.write(problem_type + "," + k + "," + str(score_per_problem[k]) + "\n")
-                        if self.record_score_per_problem == 2:
+                        if self.record_score_per_problem == 1 and self.current_split == "train":
+                            with open(f"{self.curr_dir}/outputs/score_per_problem_training_{self.wandb_run_id}.txt", "a") as file:
+                                for batch in score_per_problem:
+                                    for k in batch:
+                                        file.write(self.current_split + "," + curr_pt + "," + k + "," + str(batch[k]) + "\n")
+                        if self.record_score_per_problem == 2 and self.current_split == "test":
+                            with open(f"{self.curr_dir}/outputs/score_per_problem_testing_{self.wandb_run_id}.txt", "a") as file:
+                                for batch in score_per_problem:
+                                    for k in batch:
+                                        file.write(self.current_split + "," + curr_pt + "," + k + "," + str(batch[k]) + "\n")
+                        if self.record_score_per_problem == 3 and (self.current_split == "train" or self.current_split == "test"):
                             with open(f"{self.curr_dir}/outputs/score_per_problem_training_and_testing_{self.wandb_run_id}.txt", "a") as file:
-                                for k in score_per_problem:
-                                    file.write(problem_type + "," + k + "," + str(score_per_problem[k]) + "\n")
+                                for batch in score_per_problem:
+                                    for k in batch:
+                                        file.write(self.current_split + "," + curr_pt + "," + k + "," + str(batch[k]) + "\n")
 
-                        if   problem_type == "addition": # For addition, we can use the purely differentiable method we created (we don't have to though)
-                            symbolic_sums = [self.SE.add_VSA(symbolic_encoding[i].unsqueeze(0).type_as(self.SE.vectors[self.SE.VSA_n1])) for i in range(symbolic_encoding.shape[0])]
-                            symbolic_sums = [bind(symbolic_sums[i], self.SE.vectors[self.SE.VSA_n1]).type_as(h) for i in range(symbolic_encoding.shape[0])]
-                            final_symbol = torch.stack(symbolic_sums)
-                            #decoded_n1 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].type_as(self.SE.vectors[self.SE.VSA_n1]), self.SE.VSA_n1))]) for i in range(symbolic_encoding.shape[0])]
-                            #decoded_n2 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].type_as(self.SE.vectors[self.SE.VSA_n2]), self.SE.VSA_n2))]) for i in range(symbolic_encoding.shape[0])]
-                            if not self.simulate_perfect_encoder:
-                                decoded_n1 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n1]), self.SE.VSA_n1) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
-                                decoded_n2 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n2]), self.SE.VSA_n2) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
+                        if not self.simulate_perfect_encoder:
+                            decoded_n1 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n1]), self.SE.VSA_n1) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
+                            decoded_n2 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n2]), self.SE.VSA_n2) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
+                        else:
+                            decoded_n1 = curr_x
+                            decoded_n2 = curr_y
+                        if problem_type == "addition":
+                            # For addition, we can use the purely differentiable method we created (we don't have to though)
+                            # symbolic_sums = [self.SE.add_VSA(symbolic_encoding[i].unsqueeze(0).type_as(self.SE.vectors[self.SE.VSA_n1])) for i in range(_bsz)]
+                            # symbolic_sums = [bind(symbolic_sums[i], self.SE.vectors[self.SE.VSA_n1]).type_as(h) for i in range(_bsz)]
+                            # final_symbol = torch.stack(symbolic_sums)
+
+                            decoded_sums  = torch.tensor([int(decoded_n1[i] + decoded_n2[i]) for i in range(_bsz)])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_sums, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
                             else:
-                                decoded_n1 = self.curr_x
-                                decoded_n2 = self.curr_y
+                                final_symbol = self.SE.generate_VSA(decoded_sums, [problem_type_identity[problem_type](x) for x in decoded_sums], single_number_generation=False, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+
                             if verbose:
                                 print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "sum:", decoded_n1[0]+decoded_n2[0])
                             if verbose == 2:
                                 for k in range(1, _bsz):
                                     print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "sum:", decoded_n1[k]+decoded_n2[k])
-                        else:
-                            #decoded_n1 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].to(torch.float32), self.SE.VSA_n1))]) for i in range(symbolic_encoding.shape[0])]
-                            #decoded_n2 = [sum([round(i, 0) * 10**n for n, i in enumerate(self.SE.decode_digits(symbolic_encoding[i].to(torch.float32), self.SE.SVSA_n2))]) for i in range(symbolic_encoding.shape[0])]
-                            if not self.simulate_perfect_encoder:
-                                decoded_n1 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n1]), self.SE.VSA_n1) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
-                                decoded_n2 = (self.SE.decode_digits(symbolic_encoding.type_as(self.SE.vectors[self.SE.VSA_n2]), self.SE.VSA_n2) * torch.tensor([10 ** i for i in range(self.SE.max_digits)])).sum(axis=1).tolist()
+                        elif problem_type == "multiplication":
+                            if self.limit_solution_digits:
+                                decoded_prods  = torch.tensor([int(decoded_n1[i] * decoded_n2[i]) % 10**(self.complexity+1) for i in range(_bsz)])
                             else:
-                                decoded_n1 = self.curr_x
-                                decoded_n2 = self.curr_y
-                            if problem_type == "multiplication":
+                                decoded_prods  = torch.tensor([int(decoded_n1[i] * decoded_n2[i])                           for i in range(_bsz)])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_prods, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_prods, [problem_type_identity[problem_type](x) for x in decoded_prods], single_number_generation=False, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            if verbose:
                                 if self.limit_solution_digits:
-                                    decoded_prod  = [int(decoded_n1[i] * decoded_n2[i]) % 10**(self.complexity+1) for i in range(symbolic_encoding.shape[0])]
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "product:", decoded_n1[0]*decoded_n2[0] % 10**(self.complexity+1))
                                 else:
-                                    decoded_prod  = [int(decoded_n1[i] * decoded_n2[i])                           for i in range(symbolic_encoding.shape[0])]
-                                if not self.use_specific_identities:
-                                    symbolic_prod = [self.SE.generate_VSA(decoded_prod[i], 0,                                                    single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
-                                else:
-                                    symbolic_prod = [self.SE.generate_VSA(decoded_prod[i], problem_type_identity[problem_type](decoded_prod[i]), single_number_generation=False          ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
-                                final_symbol = torch.stack(symbolic_prod)
-                                if verbose:
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "product:", decoded_n1[0]*decoded_n2[0])
+                            if verbose == 2:
+                                for k in range(1, _bsz):
                                     if self.limit_solution_digits:
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "product:", decoded_n1[0]*decoded_n2[0] % 10**(self.complexity+1))
+                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "product:", decoded_n1[k]*decoded_n2[k] % 10**(self.complexity+1))
                                     else:
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "product:", decoded_n1[0]*decoded_n2[0])
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        if self.limit_solution_digits:
-                                            print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "product:", decoded_n1[k]*decoded_n2[k] % 10**(self.complexity+1))
-                                        else:
-                                            print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "product:", decoded_n1[k]*decoded_n2[k])
+                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "product:", decoded_n1[k]*decoded_n2[k])
 
-                            elif problem_type == "division":
-                                symbolic_quots = []
-                                for i in range(symbolic_encoding.shape[0]):
-                                    if decoded_n2[i] != 0:
-                                        decoded_quot = int(decoded_n1[i] // decoded_n2[i])
-                                    else:
-                                        decoded_quot = 0
-                                    if not self.use_specific_identities:
-                                        symbolic_quot = self.SE.generate_VSA(decoded_quot,                                                 0, single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
-                                    else:
-                                        symbolic_quot = self.SE.generate_VSA(decoded_quot, problem_type_identity[problem_type](decoded_quot), single_number_generation=False          ).to(torch.bfloat16).squeeze(0)
-                                    symbolic_quots += [symbolic_quot]
-                                final_symbol = torch.stack(symbolic_quots)
-                                if verbose:
-                                    if decoded_n2[0] != 0:
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "quotient:", decoded_n1[0]/decoded_n2[0])
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        if decoded_n2[k] != 0:
-                                            print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "quotient:", decoded_n1[k]/decoded_n2[k])
+                        elif problem_type == "division":
+                            # decoded_quots = []
+                            # for i in range(_bsz):
+                            #     if decoded_n2[i] != 0:
+                            #         decoded_quot = int(decoded_n1[i] // decoded_n2[i])
+                            #     else:
+                            #         decoded_quot = 0
+                            #     decoded_quots += [decoded_quot]
+                            # decoded_quots = torch.tensor(decoded_quots)
+                            decoded_quots = torch.tensor([int(decoded_n1[i] // decoded_n2[i]) if decoded_n2[i] != 0 else 0 for i in range(_bsz)])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_quots, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_quots, [problem_type_identity[problem_type](x) for x in decoded_quots], single_number_generation=False, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            if verbose:
+                                if decoded_n2[0] != 0:
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "quotient:", decoded_n1[0]/decoded_n2[0])
+                            if verbose == 2:
+                                for k in range(1, _bsz):
+                                    if decoded_n2[k] != 0:
+                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "quotient:", decoded_n1[k]/decoded_n2[k])
 
-                            elif problem_type == "modulo":
-                                symbolic_mods = []
-                                for i in range(symbolic_encoding.shape[0]):
-                                    if decoded_n2[i] != 0:
-                                        decoded_mod = int(decoded_n1[i] % decoded_n2[i])
-                                    else:
-                                        decoded_mod = 0
-                                    if not self.use_specific_identities:
-                                        symbolic_mod = self.SE.generate_VSA(decoded_mod, 0,                                                single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
-                                    else:
-                                        symbolic_mod = self.SE.generate_VSA(decoded_mod, problem_type_identity[problem_type](decoded_mod), single_number_generation=False          ).to(torch.bfloat16).squeeze(0)
+                        elif problem_type == "modulo":
+                            # decoded_mods = []
+                            # for i in range(_bsz):
+                            #     if decoded_n2[i] != 0:
+                            #         decoded_mod = int(decoded_n1[i] % decoded_n2[i])
+                            #     else:
+                            #         decoded_mod = 0
+                            #     decoded_mods += [decoded_mod]
+                            # decoded_mods = torch.tensor(decoded_mod)
+                            decoded_mods = torch.tensor([
+                                int(decoded_n1[i] % decoded_n2[i]) if decoded_n2[i] != 0 else 0
+                                for i in range(_bsz)
+                            ])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_mods, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_mods, [problem_type_identity[problem_type](x) for x in decoded_mods], single_number_generation=False, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
 
-                                    symbolic_mods += [symbolic_mod]
-                                final_symbol = torch.stack(symbolic_mods)
-                                if verbose:
-                                    if decoded_n2[0] != 0:
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "modulo:", decoded_n1[0]%decoded_n2[0])
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        if decoded_n2[k] != 0:
-                                            print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "modulo:", decoded_n1[k]%decoded_n2[k])
+                            if verbose:
+                                if decoded_n2[0] != 0:
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "modulo:", decoded_n1[0]%decoded_n2[0])
+                            if verbose == 2:
+                                for k in range(1, _bsz):
+                                    if decoded_n2[k] != 0:
+                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "modulo:", decoded_n1[k]%decoded_n2[k])
 
-                            elif problem_type == "gcd":
-                                symbolic_gcds = []
-                                for i in range(symbolic_encoding.shape[0]):
-                                    decoded_gcd = np.gcd(int(decoded_n1[i]), int(decoded_n2[i]))
-                                    if not self.use_specific_identities:
-                                        symbolic_gcd = self.SE.generate_VSA(decoded_gcd, 0,                                                single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
-                                    else:
-                                        symbolic_gcd = self.SE.generate_VSA(decoded_gcd, problem_type_identity[problem_type](decoded_gcd), single_number_generation=False          ).to(torch.bfloat16).squeeze(0)
-                                    symbolic_gcds += [symbolic_gcd]
-                                final_symbol = torch.stack(symbolic_gcds)
-                                if verbose:
-                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "gcd:", np.gcd(int(decoded_n1[0]), int(decoded_n2[0])))
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "gcd:", np.gcd(int(decoded_n1[k]), int(decoded_n2[k])))
+                        elif problem_type == "gcd":
+                            # decoded_gcds = []
+                            # for i in range(_bsz):
+                            #     decoded_gcd = np.gcd(int(decoded_n1[i]), int(decoded_n2[i]))
+                            #     decoded_gcds += [int(decoded_gcd)]
+                            # decoded_gcds = torch.tensor(decoded_gcds)
+                            decoded_gcds = torch.tensor([
+                                int(np.gcd(int(decoded_n1[i]), int(decoded_n2[i])))
+                                for i in range(_bsz)
+                            ])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_gcds, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_gcds, [problem_type_identity[problem_type](x) for x in decoded_gcds], single_number_generation=False, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            if verbose:
+                                print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "gcd:", np.gcd(int(decoded_n1[0]), int(decoded_n2[0])))
+                            if verbose == 2:
+                                for k in range(1, _bsz):
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "gcd:", np.gcd(int(decoded_n1[k]), int(decoded_n2[k])))
 
-                            elif problem_type == "lcm":
-                                symbolic_lcms = []
-                                for i in range(symbolic_encoding.shape[0]):
+                        elif problem_type == "lcm":
+                            # decoded_lcms = []
+                            # for i in range(_bsz):
+                            #     if self.limit_solution_digits:
+                            #         decoded_lcm  = np.lcm(int(decoded_n1[i]), int(decoded_n2[i])) % 10**(self.complexity+1)
+                            #     else:
+                            #         decoded_lcm  = np.lcm(int(decoded_n1[i]), int(decoded_n2[i]))
+                            #     decoded_lcms += [int(decoded_lcm)]
+                            # decoded_lcms = torch.tensor(decoded_lcms)
+                            decoded_lcms = torch.tensor([
+                                int(np.lcm(int(decoded_n1[i]), int(decoded_n2[i])) % 10**(self.complexity+1)) if self.limit_solution_digits
+                                else int(np.lcm(int(decoded_n1[i]), int(decoded_n2[i])))
+                                for i in range(_bsz)
+                            ])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_lcms, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_lcms, [problem_type_identity[problem_type](x) for x in decoded_lcms], single_number_generation=False, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            if verbose:
+                                if self.limit_solution_digits:
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "lcm:", np.lcm(int(decoded_n1[0]), int(decoded_n2[0])) % 10**(self.complexity+1))
+                                else:
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "lcm:", np.lcm(int(decoded_n1[0]), int(decoded_n2[0])))
+                            if verbose == 2:
+                                for k in range(1, _bsz):
                                     if self.limit_solution_digits:
-                                        decoded_lcm  = np.lcm(int(decoded_n1[i]), int(decoded_n2[i])) % 10**(self.complexity+1)
+                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "lcm:", np.lcm(int(decoded_n1[k]), int(decoded_n2[k])) % 10**(self.complexity+1))
                                     else:
-                                        decoded_lcm  = np.lcm(int(decoded_n1[i]), int(decoded_n2[i]))
-                                    if not self.use_specific_identities:
-                                        symbolic_lcm = self.SE.generate_VSA(decoded_lcm, 0,                                                single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
-                                    else:
-                                        symbolic_lcm = self.SE.generate_VSA(decoded_lcm, problem_type_identity[problem_type](decoded_lcm), single_number_generation=False          ).to(torch.bfloat16).squeeze(0)
-                                    symbolic_lcms += [symbolic_lcm]
-                                final_symbol = torch.stack(symbolic_lcms)
-                                if verbose:
-                                    if self.limit_solution_digits:
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "lcm:", np.lcm(int(decoded_n1[0]), int(decoded_n2[0])) % 10**(self.complexity+1))
-                                    else:
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "lcm:", np.lcm(int(decoded_n1[0]), int(decoded_n2[0])))
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        if self.limit_solution_digits:
-                                            print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "lcm:", np.lcm(int(decoded_n1[k]), int(decoded_n2[k])) % 10**(self.complexity+1))
-                                        else:
-                                            print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "lcm:", np.lcm(int(decoded_n1[k]), int(decoded_n2[k])))
+                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "lcm:", np.lcm(int(decoded_n1[k]), int(decoded_n2[k])))
 
-                            elif problem_type == "square_mod":
-                                symbolic_sqs = []
-                                for i in range(symbolic_encoding.shape[0]):
-                                    if decoded_n2[i] != 0:
-                                        decoded_sq = int(decoded_n1[i])**2 % int(decoded_n2[i])
-                                    else:
-                                        decoded_sq = 0
-                                    if not self.use_specific_identities:
-                                        symbolic_sq = self.SE.generate_VSA(decoded_sq, 0,                                               single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0)
-                                    else:
-                                        symbolic_sq = self.SE.generate_VSA(decoded_sq, problem_type_identity[problem_type](decoded_sq), single_number_generation=False     ).to(torch.bfloat16).squeeze(0)
-                                    symbolic_sqs += [symbolic_sq]
-                                final_symbol = torch.stack(symbolic_sqs)
-                                if verbose:
-                                    if decoded_n2[0] != 0:
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "square_mod:", int(decoded_n1[0])**2 % int(decoded_n2[0]))
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        if decoded_n2[k] != 0:
-                                            print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "square_mod:", int(decoded_n1[k])**2 % int(decoded_n2[k]))
+                        elif problem_type == "square_mod":
+                            # decoded_sqs  = []
+                            # for i in range(_bsz):
+                            #     if decoded_n2[i] != 0:
+                            #         decoded_sq = int(decoded_n1[i])**2 % int(decoded_n2[i])
+                            #     else:
+                            #         decoded_sq = 0
+                            #     decoded_sqs += [decoded_sq]
+                            # decoded_sqs = torch.tensor(decoded_sqs)
+                            decoded_sqs = torch.tensor([
+                                int(decoded_n1[i])**2 % int(decoded_n2[i]) if decoded_n2[i] != 0 else 0
+                                for i in range(_bsz)
+                            ])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_sqs, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type] * _bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_sqs, [problem_type_identity[problem_type](x) for x in decoded_sqs], single_number_generation=False, problem_types=[problem_type] * _bsz).to(torch.bfloat16)
+                            if verbose:
+                                if decoded_n2[0] != 0:
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "square_mod:", int(decoded_n1[0])**2 % int(decoded_n2[0]))
+                            if verbose == 2:
+                                for k in range(1, _bsz):
+                                    if decoded_n2[k] != 0:
+                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "square_mod:", int(decoded_n1[k])**2 % int(decoded_n2[k]))
 
-                            elif problem_type == "bitwise_and":
-                                decoded_and  = [int(decoded_n1[i]) & int(decoded_n2[i]) for i in range(symbolic_encoding.shape[0])]
-                                if not self.use_specific_identities:
-                                    symbolic_and = [self.SE.generate_VSA(decoded_and[i], 0,                                                   single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
-                                else:
-                                    symbolic_and = [self.SE.generate_VSA(decoded_and[i], problem_type_identity[problem_type](decoded_and[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
-                                final_symbol = torch.stack(symbolic_and)
-                                if verbose:
-                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_and:", int(decoded_n1[0]) & int(decoded_n2[0]))
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "bitwise_and:", int(decoded_n1[k]) & int(decoded_n2[k]))
+                        elif problem_type == "bitwise_and":
+                            decoded_and  = torch.tensor([int(decoded_n1[i]) & int(decoded_n2[i]) for i in range(_bsz)])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_and, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type] * _bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_and, [problem_type_identity[problem_type](x) for x in decoded_and], single_number_generation=False, problem_types=[problem_type] * _bsz).to(torch.bfloat16)
+                            if verbose:
+                                print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_and:", int(decoded_n1[0]) & int(decoded_n2[0]))
+                            if verbose == 2:
+                                for k in range(1, _bsz):
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "bitwise_and:", int(decoded_n1[k]) & int(decoded_n2[k]))
 
-                            elif problem_type == "bitwise_xor":
-                                decoded_xor  = [int(decoded_n1[i]) ^ int(decoded_n2[i]) for i in range(symbolic_encoding.shape[0])]
-                                if not self.use_specific_identities:
-                                    symbolic_xor = [self.SE.generate_VSA(decoded_xor[i], 0,                                                   single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
-                                else:
-                                    symbolic_xor = [self.SE.generate_VSA(decoded_xor[i], problem_type_identity[problem_type](decoded_xor[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
-                                final_symbol = torch.stack(symbolic_xor)
-                                if verbose:
-                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_xor:", int(decoded_n1[0]) ^ int(decoded_n2[0]))
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "bitwise_xor:", int(decoded_n1[k]) ^ int(decoded_n2[k]))
+                        elif problem_type == "bitwise_xor":
+                            decoded_xor  = torch.tensor([int(decoded_n1[i]) ^ int(decoded_n2[i]) for i in range(_bsz)])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_xor, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type] * _bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_xor, [problem_type_identity[problem_type](x) for x in decoded_xor], single_number_generation=False, problem_types=[problem_type] * _bsz).to(torch.bfloat16)
+                            if verbose:
+                                print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_xor:", int(decoded_n1[0]) ^ int(decoded_n2[0]))
+                            if verbose == 2:
+                                for k in range(1, _bsz):
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "bitwise_xor:", int(decoded_n1[k]) ^ int(decoded_n2[k]))
 
-                            elif problem_type == "bitwise_or":
-                                decoded_or  = [int(decoded_n1[i]) | int(decoded_n2[i]) for i in range(symbolic_encoding.shape[0])]
-                                if not self.use_specific_identities:
-                                    symbolic_or = [self.SE.generate_VSA(decoded_or[i], 0,                                                  single_number_generation=self.double_rep).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
-                                else:
-                                    symbolic_or = [self.SE.generate_VSA(decoded_or[i], problem_type_identity[problem_type](decoded_or[i]), single_number_generation=False     ).to(torch.bfloat16).squeeze(0) for i in range(symbolic_encoding.shape[0])]
-                                final_symbol = torch.stack(symbolic_or)
-                                if verbose:
-                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_or:", int(decoded_n1[0]) | int(decoded_n2[0]))
-                                if verbose == 2:
-                                    for k in range(1, _bsz):
-                                        print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "bitwise_or:", int(decoded_n1[k]) | int(decoded_n2[k]))
+                        elif problem_type == "bitwise_or":
+                            decoded_or  = torch.tensor([int(decoded_n1[i]) | int(decoded_n2[i]) for i in range(_bsz)])
+                            if not self.use_specific_identities:
+                                final_symbol = self.SE.generate_VSA(decoded_or, torch.zeros(_bsz).to(torch.int), single_number_generation=self.single_number_generation, problem_types=[problem_type]*_bsz).to(torch.bfloat16)
+                            else:
+                                final_symbol = self.SE.generate_VSA(decoded_or, [problem_type_identity[problem_type](x) for x in decoded_or], single_number_generation=False, problem_types=[problem_type] * _bsz).to(torch.bfloat16)
+                            if verbose:
+                                print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[0]), "second number:", int(decoded_n2[0]), "bitwise_or:", int(decoded_n1[0]) | int(decoded_n2[0]))
+                            if verbose == 2:
+                                for k in range(1, _bsz):
+                                    print(f"Decoded symbolic encodings (pass # {curr_token+1}): first number:",  int(decoded_n1[k]), "second number:", int(decoded_n2[k]), "bitwise_or:", int(decoded_n1[k]) | int(decoded_n2[k]))
 
                         if self.static_encoding: # If static_encoding is set to True, then we need to save final_symbol and use_symbolic_layer for future use
                             self.final_symbol = final_symbol
                             self.use_symbolic_layer = use_symbolic_layer
 
                         if self.calculate_encoding_accuracy:
-                            #print("Decoded n1:", decoded_n1)
-                            #print("Decoded n2:", decoded_n2)
-                            #print("Actual  n1:", self.curr_x)
-                            #print("Actual  n2:", self.curr_y)
                             for k in range(_bsz):
                                 for digit in range(self.complexity + 1):
-                                    self.encoding_accuracy[problem_type]["digit " + str(digit)]["first_number"]  += [str(int(decoded_n1[k])).zfill(self.complexity+1)[::-1][digit] == str(self.curr_x[k]).zfill(self.complexity+1)[::-1][digit]]
-                                    self.encoding_accuracy[problem_type]["digit " + str(digit)]["second_number"] += [str(int(decoded_n2[k])).zfill(self.complexity+1)[::-1][digit] == str(self.curr_y[k]).zfill(self.complexity+1)[::-1][digit]]
+                                    self.encoding_accuracy[curr_pt]["digit " + str(digit)]["first_number"]  += [str(int(decoded_n1[k])).zfill(self.complexity+1)[::-1][digit] == str(curr_x[k]).zfill(self.complexity+1)[::-1][digit]]
+                                    self.encoding_accuracy[curr_pt]["digit " + str(digit)]["second_number"] += [str(int(decoded_n2[k])).zfill(self.complexity+1)[::-1][digit] == str(curr_y[k]).zfill(self.complexity+1)[::-1][digit]]
                     
                     elif self.static_encoding: # If the curr_token is not 0 and we are using static_encoding, then just load the final_symbol and use_symbolic_layer as computed before
                         final_symbol       = self.final_symbol.clone()
@@ -613,7 +631,9 @@ class Transformer(nn.Module):
                     # Concatenate the modified token of the LLM (the most recent token) with the rest of the tokens
                     h = torch.cat([h[:, :-1, :], torch.where(use_symbolic_layer, modified_h * (1 - self.skip_weights[skip_index]) + h[:, -1, :] * self.skip_weights[skip_index], h[:, -1, :]).unsqueeze(1)], dim=1)
                 else:
-                    h = torch.cat([h[:, :-1, :], (modified_h + h[:, -1, :]).unsqueeze(1)], dim=1)
+                    #h = torch.cat([h[:, :-1, :], (modified_h + h[:, -1, :]).unsqueeze(1)], dim=1)
+                    h = torch.cat([h[:, :-1, :], torch.where(use_symbolic_layer, modified_h + h[:, -1, :], h[:, -1, :]).unsqueeze(1)], dim=1)
+                    
                     h = self.rms_layers[skip_index](h)
                 skip_index = skip_index + 1
 

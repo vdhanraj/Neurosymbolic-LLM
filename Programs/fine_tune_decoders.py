@@ -100,6 +100,7 @@ parser.add_argument("--complexity",                type=int,   default=config_de
 parser.add_argument("--temperature",               type=float, default=config_defaults.get("temperature"), required=False)
 
 parser.add_argument("--train_model",               type=str2bool,  default=config_defaults.get("train_model"), required=False)
+parser.add_argument("--validate_model",            type=str2bool,  default=config_defaults.get("validate_model"), required=False)
 parser.add_argument("--test_model",                type=str2bool,  default=config_defaults.get("test_model"),  required=False)
 parser.add_argument("--lora_baseline",             type=str2bool,  default=config_defaults.get("lora_baseline"), required=False)
 parser.add_argument("--starting_skip_strength",    type=float, default=config_defaults.get("starting_skip_strength"), required=False)
@@ -108,7 +109,7 @@ parser.add_argument("--normalize_VSA_before_dot",  type=str2bool,  default=confi
 parser.add_argument("--initialize_decoders",       type=str2bool,  default=config_defaults.get("initialize_decoders"), required=False)
 parser.add_argument("--normalize_vector",          type=str2bool,  default=config_defaults.get("normalize_vector"), required=False)
 parser.add_argument("--rms_layer",                 type=str2bool,  default=config_defaults.get("rms_layer"), required=False)
-parser.add_argument("--double_rep",                type=str2bool,  default=config_defaults.get("double_rep"), required=False)
+parser.add_argument("--single_number_generation",  type=str2bool,  default=config_defaults.get("single_number_generation"), required=False)
 parser.add_argument("--use_specific_identities",   type=str2bool,  default=config_defaults.get("use_specific_identities"), required=False)
 parser.add_argument("--trainable_skip",            type=str2bool,  default=config_defaults.get("trainable_skip"), required=False)
 parser.add_argument("--symbolic_encoding_layer",   type=int,   default=config_defaults.get("symbolic_encoding_layer"), required=False)
@@ -116,23 +117,32 @@ parser.add_argument("--symbolic_decoding_layers",  nargs="+",  type=int, default
 
 # === Optimization ===
 parser.add_argument("--num_epochs",                      type=int,        default=config_defaults.get("num_epochs"), required=False)
+parser.add_argument("--num_steps",                       type=int,        default=config_defaults.get("num_steps"), required=False)
 parser.add_argument("--n_samples",                       type=int,        default=config_defaults.get("n_samples"), required=False)
 parser.add_argument("--inference_to_backprop_ratio",     type=int,        default=config_defaults.get("inference_to_backprop_ratio"), required=False)
 parser.add_argument("--learning_rate",                   type=float,      default=config_defaults.get("learning_rate"), required=False)
 parser.add_argument("--learning_rate_reduction_factors", type=json.loads, default=json.dumps(config_defaults.get("learning_rate_reduction_factors")), required=False)
 
 # === Logging + verbosity ===
-parser.add_argument("--epochs_to_print",     type=int, default=config_defaults.get("epochs_to_print"), required=False)
+parser.add_argument("--steps_to_print",      type=int, default=config_defaults.get("steps_to_print"), required=False)
 parser.add_argument("--print_all_pts_freq",  type=int, default=config_defaults.get("print_all_pts_freq"), required=False)
 parser.add_argument("--verbose",             type=int, default=config_defaults.get("verbose"), required=False)
 
+# === Validation ===
+parser.add_argument("--val_num_steps",                   type=int,        default=config_defaults.get("val_num_steps"), required=False)
+parser.add_argument("--val_inference_to_backprop_ratio", type=int,        default=config_defaults.get("val_inference_to_backprop_ratio"), required=False)
+parser.add_argument("--val_n_samples",                   type=int,        default=config_defaults.get("val_n_samples"), required=False)
+parser.add_argument("--val_temperature",                 type=float,      default=config_defaults.get("val_temperature"), required=False)
+parser.add_argument("--val_steps_to_print",              type=int,        default=config_defaults.get("val_steps_to_print"), required=False)
+parser.add_argument("--val_verbose",                     type=int,        default=config_defaults.get("val_verbose"), required=False)
+
 # === Testing ===
 parser.add_argument("--testing_problems",         nargs="+", type=str,        default=config_defaults.get("testing_problems"), required=False)
-parser.add_argument("--testing_num_epochs",                  type=int,        default=config_defaults.get("testing_num_epochs"), required=False)
+parser.add_argument("--testing_num_steps",                   type=int,        default=config_defaults.get("testing_num_steps"), required=False)
 parser.add_argument("--testing_inference_to_backprop_ratio", type=int,        default=config_defaults.get("testing_inference_to_backprop_ratio"), required=False)
 parser.add_argument("--testing_n_samples",                   type=int,        default=config_defaults.get("testing_n_samples"), required=False)
 parser.add_argument("--testing_temperature",                 type=float,      default=config_defaults.get("testing_temperature"), required=False)
-parser.add_argument("--testing_epochs_to_print",             type=int,        default=config_defaults.get("testing_epochs_to_print"), required=False)
+parser.add_argument("--testing_steps_to_print",              type=int,        default=config_defaults.get("testing_steps_to_print"), required=False)
 parser.add_argument("--testing_verbose",                     type=int,        default=config_defaults.get("testing_verbose"), required=False)
 parser.add_argument("--record_score_per_problem",            type=int,        default=config_defaults.get("record_score_per_problem"), required=False)
 
@@ -154,15 +164,22 @@ parser.add_argument("--save_responses",              type=str2bool, default=conf
 parser.add_argument("--simulate_perfect_encoder",    type=str2bool, default=config_defaults.get("simulate_perfect_encoder"), required=False)
 parser.add_argument("--modify_question_format",      type=str2bool, default=config_defaults.get("modify_question_format"),   required=False)
 
+parser.add_argument("--training_data_df_path", type=str, default=config_defaults.get("training_data_df_path"), help="Path to pre-generated training dataset (leave as '' to run based on randomly sampled data)")
+parser.add_argument("--val_data_df_path", type=str, default=config_defaults.get("val_data_df_path"), help="Path to pre-generated validation dataset (leave as '' to run based on randomly sampled data)")
+parser.add_argument("--testing_data_df_path", type=str, default=config_defaults.get("testing_data_df_path"), help="Path to pre-generated testing dataset (leave as '' to run based on randomly sampled data)")
+
 # === Final parse ===
 args = parser.parse_args(remaining_argv)
 
-args.curr_dir            = str(Path(args.curr_dir).expanduser())
-args.git_dir             = str(Path(args.git_dir ).expanduser())
-args.ckpt_dir            = str(Path(args.ckpt_dir).expanduser())
-args.tokenizer_path      = str(Path(args.tokenizer_path).expanduser())
-args.log_wandb           = bool(args.log_wandb)
+args.curr_dir              = str(Path(args.curr_dir).expanduser())
+args.git_dir               = str(Path(args.git_dir ).expanduser())
+args.ckpt_dir              = str(Path(args.ckpt_dir).expanduser())
+args.tokenizer_path        = str(Path(args.tokenizer_path).expanduser())
+args.training_data_df_path = str(Path(args.training_data_df_path).expanduser()) if args.training_data_df_path else ''
+args.val_data_df_path      = str(Path(args.val_data_df_path).expanduser()) if args.val_data_df_path else ''
+args.testing_data_df_path  = str(Path(args.testing_data_df_path).expanduser()) if args.testing_data_df_path else ''
 
+args.log_wandb         = bool(args.log_wandb)
 args.n_samples         = min(args.n_samples,         args.max_batch_size)
 args.testing_n_samples = min(args.testing_n_samples, args.max_batch_size)
 
@@ -242,12 +259,10 @@ def get_dialog_indices(generator, dialog, calculate_end_index=False):
         
     return start_indices, end_indices
 
-def training_step(n_samples, generator, temperature=0, problem_type="addition", inference_to_backprop_ratio=1, 
+def training_step(n_samples, generator, temperature=0, problem_type="addition", df_dialogs=None, inference_to_backprop_ratio=1, 
                   optimizer=None, criterion=None, complexity=2, losses_per_pt=None, scores_per_pt=None, verbose=False):
 
     all_logits = []
-    #all_x     = []
-    #all_y     = []
     all_corr  = []
 
     total_score = 0
@@ -256,15 +271,60 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
     all_dialogs = []
     pts     = []
 
+    if type(df_dialogs) == type(None):
+        generate_random_dialog = True
+    else:
+        generate_random_dialog = False
+
+        # If the length of the current batch is not equal to the number of samples the LLM will consume times the 
+        #  inference_to_backprop_ratio, adjust the inference_to_backprop_ratio accordingly
+        if len(df_dialogs) // n_samples != inference_to_backprop_ratio:
+            inference_to_backprop_ratio = len(df_dialogs) // n_samples
+
+        batch_question, batch_problem_type = df_dialogs["question"], df_dialogs["problem_type"]
+        batch_x, batch_y, batch_solution   = df_dialogs["x"], df_dialogs["y"], df_dialogs["solution"]
+
+        # batch_dialog_data is a list of lists, with length equal to the length of df_dialogs. Each list contains 4 items. The first is 
+        #  the dialogs object, which is a list of Dialog objects, the length of which is equal to n_samples. The second is the x values, which is 
+        #  an array of integers, the third is the y values (also array of integers), and the final is the problem type, a string
+        batch_dialog_data = [generate_dialog(complexity=complexity, samples=1, string_nums=generator.model.test_with_non_numerical_rep,
+                                             limit_solution_digits=generator.model.limit_solution_digits, modify_question_format=generator.model.modify_question_format,
+                                             problem_type=pt) for pt in batch_problem_type]
+
+        for d in range(n_samples):
+            # First index is grabbing the batch item, second index is grabbing the dialog (instead of the x, y , pt),
+            #  third index is grabbing the batch item within dialogs (which is always of length 1 due to samples=1 above), and last
+            #  index is grabbing the last dialog sequence, since we only want to change that while leaving the example dialogs the same
+            batch_dialog_data[d][0][0][-1]['content'] = batch_question.values[d]
+            batch_dialog_data[d][1][0], batch_dialog_data[d][2][0] = batch_x.values[d], batch_y.values[d]
+
+
+        # batch_dialog_data should be [dialog, x, y, pt], where each element is n_samples long. batch_dialog_data previously was of length n_samples, where each
+        #  item in the sequence was [dialog, x, y, pt]. The below code puts it into the correct format
+        batch_dialog_data = [[d[0][0] for d in batch_dialog_data],
+                             np.array([d[1][0] for d in batch_dialog_data]),
+                             np.array([d[2][0] for d in batch_dialog_data]),
+                             batch_problem_type.values]
+        
     for n in range(inference_to_backprop_ratio):
         if verbose:
-            print("On sub-epoch iteration:", n+1)
+            print("On sub-step iteration:", n+1)
         response_data = {}
 
         total_loss = 0
 
-        dialogs, x, y, curr_problem_type = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type, 
-                                                           limit_solution_digits=generator.model.limit_solution_digits, modify_question_format=generator.model.modify_question_format)
+        if generate_random_dialog:
+            dialogs, x, y, curr_problem_type = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type, 
+                                                               limit_solution_digits=generator.model.limit_solution_digits, 
+                                                               #modify_question_format=generator.model.modify_question_format # Don't train the decoder on the modified question formats
+                                                               )
+        else:
+            micro_batch_dialog_data = [batch_dialog_data[0][(n) * n_samples : (n + 1) * n_samples], batch_dialog_data[1][(n) * n_samples : (n + 1) * n_samples], 
+                                       batch_dialog_data[2][(n) * n_samples : (n + 1) * n_samples], batch_dialog_data[3][(n) * n_samples : (n + 1) * n_samples]]
+            dialogs, x, y, curr_problem_type = micro_batch_dialog_data[0], micro_batch_dialog_data[1], micro_batch_dialog_data[2], micro_batch_dialog_data[3]
+            curr_problem_type = curr_problem_type[0] # TODO: Fix this hack (by getting the forward pass to accept multiple different problem types). Current workaround is setting n_samples to 1
+            #print("curr_dialogs:", dialogs, x, y, curr_problem_type)
+
         all_dialogs += [dialogs]
         if generator.model.encoder_input_tokens == "all":
             start_indices, end_indices    = get_dialog_indices(generator, dialogs, calculate_end_index=generator.model.calculate_end_index)
@@ -272,57 +332,58 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
             generator.model.curr_end_indices   = end_indices
             generator.model.dialogs            = dialogs
 
-        if generator.model.calculate_encoding_accuracy:
-            generator.model.curr_x  = x
-            generator.model.curr_y  = y
-            generator.model.curr_pt = curr_problem_type
+        #if generator.model.calculate_encoding_accuracy or generator.model.simulate_perfect_encoder or generator.model.record_score_per_problem:
+        #    generator.model.curr_x  = x
+        #    generator.model.curr_y  = y
+        #    generator.model.curr_pt = curr_problem_type
 
         pts += [curr_problem_type]
         if curr_problem_type=="addition":
             correct_responses = [x[i] + y[i] for i in range(len(x))]
-        if curr_problem_type=="multiplication":
+        elif curr_problem_type=="multiplication":
             if generator.model.limit_solution_digits:
                 correct_responses = [(x[i] * y[i]) % 10**(complexity+1) for i in range(len(x))]
             else:
                 correct_responses = [(x[i] * y[i]) for i in range(len(x))]
-        if curr_problem_type=="division":
+        elif curr_problem_type=="division":
             correct_responses = [int(x[i] // y[i]) for i in range(len(x))]
-        if curr_problem_type=="modulo":
+        elif curr_problem_type=="modulo":
             correct_responses = [x[i] % y[i] for i in range(len(x))]
-        if curr_problem_type=="gcd":
+        elif curr_problem_type=="gcd":
             correct_responses = [np.gcd(x[i], y[i]) for i in range(len(x))]
-        if curr_problem_type=="lcm":
+        elif curr_problem_type=="lcm":
             if generator.model.limit_solution_digits:
                 correct_responses = [np.lcm(x[i], y[i]) % 10**(complexity+1) for i in range(len(x))]
             else:
                 correct_responses = [np.lcm(x[i], y[i]) for i in range(len(x))]
-        if curr_problem_type=="square_mod":
+        elif curr_problem_type=="square_mod":
             correct_responses = [x[i]**2 % y[i] for i in range(len(x))]
-        if curr_problem_type=="bitwise_and":
+        elif curr_problem_type=="bitwise_and":
             correct_responses = [x[i] & y[i] for i in range(len(x))]
-        if curr_problem_type=="bitwise_xor":
+        elif curr_problem_type=="bitwise_xor":
             correct_responses = [x[i] ^ y[i] for i in range(len(x))]
-        if curr_problem_type=="bitwise_or":
+        elif curr_problem_type=="bitwise_or":
             correct_responses = [x[i] | y[i] for i in range(len(x))]
-        if curr_problem_type=="bitwise_nand":
+        elif curr_problem_type=="bitwise_nand":
             correct_responses = [~(x[i] & y[i]) for i in range(len(x))]
-        if curr_problem_type=="bitwise_nxor":
+        elif curr_problem_type=="bitwise_nxor":
             correct_responses = [~(x[i] ^ y[i]) for i in range(len(x))]
-        if curr_problem_type=="bitwise_nor":
+        elif curr_problem_type=="bitwise_nor":
             correct_responses = [~(x[i] | y[i]) for i in range(len(x))]
+        else:
+            print("Unrecognized problem type:", curr_problem_type)
+        
 
         all_correct_responses += correct_responses
 
         # Shape of list_of_probs and list_of_logits is (sequence_output_length, batch_size, num_tokens)
         h_stack, list_of_probs, list_of_logits, out_tokens = episode(dialogs=dialogs, generator=generator, temperature=temperature,
-                                                                     inference_mode=generator.model.forward_symbolic_funnel, 
-                                                                     max_decoding_length=complexity+5, verbose=verbose)
+                                                                     inference_mode=generator.model.forward_symbolic_funnel, max_decoding_length=complexity+5, 
+                                                                     curr_pt=curr_problem_type, curr_x=x, curr_y=y, verbose=verbose)
 
         #print(list_of_logits.shape, list_of_probs.shape)
 
         all_logits = all_logits + [list_of_logits]
-        #all_x      = all_x      + [torch.tensor(x)]
-        #all_y      = all_y      + [torch.tensor(y)]
         all_corr   = all_corr   + [torch.tensor(correct_responses)]
 
         for i in range(len(out_tokens)): # Iterate over n_samples
@@ -354,8 +415,6 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
         padded_tensors.append(t_padded)
 
     all_logits = torch.cat(padded_tensors, dim=1)
-    #all_x      = torch.concat(all_x)
-    #all_y      = torch.concat(all_y)
     all_corr   = torch.concat(all_corr)
 
     optimizer.zero_grad()
@@ -376,7 +435,7 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
         losses_per_pt[pts[batch//n_samples]] += [batch_loss.detach().cpu().float()]
         if log_wandb:
             wandb.log({
-                f"epoch_{pts[batch//n_samples]}": len(losses_per_pt[pts[batch//n_samples]])-1,
+                f"step_{pts[batch//n_samples]}": len(losses_per_pt[pts[batch//n_samples]])-1,
                 f"loss_{ pts[batch//n_samples]}": losses_per_pt[pts[batch//n_samples]][-1],
                 f"score_{pts[batch//n_samples]}": scores_per_pt[pts[batch//n_samples]][-1],
             })
@@ -399,10 +458,6 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
         total_norm = (tn ** 0.5) / len(dialogs) # normalize by batch size
         print(f"Total gradient norm after clipping: {total_norm}")
 
-    #response_data += ["Model Guesses:", outputs]
-    #response_data += ["Correct Answer:", all_correct_responses]
-    #response_data += ["Losses:", losses]
-
     response_data = {
         "Model Guesses": outputs,
         "Correct Answer": all_correct_responses,
@@ -413,53 +468,94 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
 
     return total_loss, total_score, response_data
 
-def inference_step(n_samples, generator, temperature=0, problem_type="addition", inference_to_backprop_ratio=1,
-                   criterion=None, cot=False, complexity=2, verbose=False):
+def inference_step(n_samples, generator, temperature=0, problem_type="addition", df_dialogs=None, 
+                   inference_to_backprop_ratio=1, criterion=None, cot=False, complexity=2, verbose=False):
 
     all_logits = []
-    #all_x     = []
-    #all_y     = []
     all_corr  = []
 
     total_score = 0
     outputs = []
     pts     = []
 
+    if type(df_dialogs) == type(None):
+        generate_random_dialog = True
+    else:
+        #print("df_dialogs shape:", df_dialogs.shape)
+        generate_random_dialog = False
+
+        # If the length of the current batch is not equal to the number of samples the LLM will consume times the 
+        #  inference_to_backprop_ratio, adjust the inference_to_backprop_ratio accordingly
+        if len(df_dialogs) // n_samples != inference_to_backprop_ratio:
+            inference_to_backprop_ratio = len(df_dialogs) // n_samples
+        batch_question, batch_problem_type = df_dialogs["question"], df_dialogs["problem_type"]
+        batch_x, batch_y, batch_solution   = df_dialogs["x"], df_dialogs["y"], df_dialogs["solution"]
+
+        # batch_dialog_data is a list of lists, with length equal to the length of df_dialogs. Each list contains 4 items. The first is 
+        #  the dialogs object, which is a list of Dialog objects, the length of which is equal to n_samples. The second is the x values, which is 
+        #  an array of integers, the third is the y values (also array of integers), and the final is the problem type, a string
+        batch_dialog_data = [generate_dialog(complexity=complexity, samples=1, string_nums=generator.model.test_with_non_numerical_rep, cot=cot,
+                                             limit_solution_digits=generator.model.limit_solution_digits, modify_question_format=generator.model.modify_question_format,
+                                             problem_type=pt) for pt in batch_problem_type]
+
+        for d in range(n_samples):
+            # First index is grabbing the batch item, second index is grabbing the dialog (instead of the x, y , pt),
+            #  third index is grabbing the batch item within dialogs (which is always of length 1 due to samples=1 above), and last
+            #  index is grabbing the last dialog sequence, since we only want to change that while leaving the example dialogs the same
+            if cot:
+                batch_dialog_data[d][0][0][-1]['content'] = f"Solve the following problem step by step: " + batch_question.values[d]
+            else:
+                batch_dialog_data[d][0][0][-1]['content'] = batch_question.values[d]
+            batch_dialog_data[d][1][0], batch_dialog_data[d][2][0] = batch_x.values[d], batch_y.values[d]
+
+
+        # batch_dialog_data should be [dialog, x, y, pt], where each element is n_samples long. batch_dialog_data previously was of length n_samples, where each
+        #  item in the sequence was [dialog, x, y, pt]. The below code puts it into the correct format
+        batch_dialog_data = [[d[0][0] for d in batch_dialog_data],
+                             np.array([d[1][0] for d in batch_dialog_data]),
+                             np.array([d[2][0] for d in batch_dialog_data]),
+                             batch_problem_type.values]
+
     for n in range(inference_to_backprop_ratio):
         if verbose:
-            print("On sub-epoch iteration:", n+1)
+            print("On sub-step iteration:", n+1)
         response_data = []
 
         total_loss = 0
 
         if generator.model.test_on_unrelated_questions:
-            dialogs, correct_responses, curr_problem_type = generate_non_math_dialog(samples=n_samples, topic="random", cot=cot,
-                                                                                     string_nums=generator.model.test_with_non_numerical_rep)
-        else:
-            dialogs, x, y, curr_problem_type = generate_dialog(complexity=complexity, samples=n_samples, 
-                                                               problem_type=problem_type, cot=cot,
-                                                               string_nums=generator.model.test_with_non_numerical_rep,
-                                                               limit_solution_digits=generator.model.limit_solution_digits,
-                                                               modify_question_format=generator.model.modify_question_format)
+            dialogs, correct_responses, curr_problem_type = generate_non_math_dialog(samples=n_samples, topic="random", cot=cot)
+            x, y = 0, 0 # Placeholder values
+        else:            
+            if generate_random_dialog:
+                dialogs, x, y, curr_problem_type = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type, string_nums=generator.model.test_with_non_numerical_rep,
+                                                                   limit_solution_digits=generator.model.limit_solution_digits, modify_question_format=generator.model.modify_question_format, cot=cot)
+            else:
+                micro_batch_dialog_data = [batch_dialog_data[0][(n) * n_samples : (n + 1) * n_samples], batch_dialog_data[1][(n) * n_samples : (n + 1) * n_samples], 
+                                           batch_dialog_data[2][(n) * n_samples : (n + 1) * n_samples], batch_dialog_data[3][(n) * n_samples : (n + 1) * n_samples]]
+                dialogs, x, y, curr_problem_type = micro_batch_dialog_data[0], micro_batch_dialog_data[1], micro_batch_dialog_data[2], micro_batch_dialog_data[3]
+                curr_problem_type = curr_problem_type[0] # TODO: Fix this hack (by getting the forward pass to accept multiple different problem types). Current workaround is setting n_samples to 1
+
             if generator.model.encoder_input_tokens == "all":
                 start_indices, end_indices    = get_dialog_indices(generator, dialogs, calculate_end_index=generator.model.calculate_end_index)
                 generator.model.curr_start_indices = start_indices
                 generator.model.curr_end_indices   = end_indices
                 generator.model.dialogs            = dialogs
 
-            if generator.model.calculate_encoding_accuracy or generator.model.simulate_perfect_encoder:
-                generator.model.curr_x = x
-                generator.model.curr_y = y
 
         if generator.model.test_with_non_numerical_rep:
             conv = lambda x: w2n.word_to_num(str(x))
-            conv_inv = lambda x: n2w.num2words(int(x))
             conv_inv = lambda x: x
+            #conv_inv = lambda x: n2w.num2words(int(x)) # Uncomment this if you want the correct response to be numerical rather than words
 
         else:
             conv = lambda x: x
             conv_inv = lambda x: x
 
+        #if generator.model.calculate_encoding_accuracy or generator.model.simulate_perfect_encoder or generator.model.record_score_per_problem:
+        #    generator.model.curr_x  = x
+        #    generator.model.curr_y  = y
+        #    generator.model.curr_pt = curr_problem_type
 
 
         pts += [curr_problem_type]
@@ -497,19 +593,16 @@ def inference_step(n_samples, generator, temperature=0, problem_type="addition",
             correct_responses = [conv_inv(~(conv(x[i]) | conv(y[i]))) for i in range(len(x))]
             
 
-        # if using cot, set the max decoding length to a large value, otherwise set it to a small value
-        if cot:
+        # if using cot or querying with full word numerical representations, set the max decoding length to a large value, otherwise set it to a small value
+        if cot or generator.model.test_with_non_numerical_rep:
             mdl = min(1000, max_seq_len)
         else:
             mdl = complexity+5
 
-        #if verbose:
-        #    print("Max decoding length:", mdl)
-
         # Shape of list_of_probs and list_of_logits is (sequence_output_length, batch_size, num_tokens)
         h_stack, list_of_probs, list_of_logits, out_tokens = episode(generator=generator, dialogs=dialogs, temperature=temperature,
-                                                                     inference_mode=generator.model.forward_symbolic_funnel, 
-                                                                     max_decoding_length=mdl, verbose=verbose)
+                                                                     inference_mode=generator.model.forward_symbolic_funnel, max_decoding_length=mdl, 
+                                                                     curr_pt=curr_problem_type, curr_x=x, curr_y=y, verbose=verbose)
 
         if cot and not generator.model.test_on_unrelated_questions:
             token_for_final = 19918
@@ -546,13 +639,9 @@ def inference_step(n_samples, generator, temperature=0, problem_type="addition",
                         modified_out_tokens     += [out_tokens    [  i  ][(out_tokens[i].index(token_for_final) + 4):   ]]
                         modified_list_of_logits += [list_of_logits[:,i,:][(out_tokens[i].index(token_for_final) + 4):,:,]]
                         modified_list_of_probs  += [list_of_probs [:,i,:][(out_tokens[i].index(token_for_final) + 4):,:,]]
-                    #print("Truncated response :\n",
-                    #      generator.tokenizer.decode(modified_out_tokens[i]))
 
-                    #print("Modified Shapes:", len(modified_out_tokens[-1]), modified_list_of_logits[-1].shape)
-
-            list_of_logits = torch.stack(modified_list_of_logits, axis=1)
-            list_of_probs  = torch.stack(modified_list_of_probs,  axis=1)
+            list_of_logits = torch.cat(modified_list_of_logits, axis=1)
+            list_of_probs  = torch.cat(modified_list_of_probs,  axis=1)
             out_tokens     = modified_out_tokens
 
         elif generator.model.test_on_unrelated_questions:
@@ -572,8 +661,6 @@ def inference_step(n_samples, generator, temperature=0, problem_type="addition",
 
 
         all_logits = all_logits + [list_of_logits]
-        #all_x      = all_x      + [torch.tensor(x)]
-        #all_y      = all_y      + [torch.tensor(y)]
         all_corr   = all_corr   + [torch.tensor(correct_responses)]
 
         for i in range(len(out_tokens)): # Iterate over n_samples
@@ -607,8 +694,6 @@ def inference_step(n_samples, generator, temperature=0, problem_type="addition",
         padded_tensors.append(t_padded)
 
     all_logits = torch.cat(padded_tensors, dim=1)
-    #all_x      = torch.concat(all_x)
-    #all_y      = torch.concat(all_y)
     all_corr   = torch.concat(all_corr)
 
     loss = 0
@@ -627,24 +712,30 @@ def inference_step(n_samples, generator, temperature=0, problem_type="addition",
 
     return total_loss, total_score, response_data
 
-def evaluate_model(testing_n_samples, testing_num_epochs, testing_temperature, problem_type, generator, criterion=None, 
-                   inference_to_backprop_ratio=1, complexity=2, cot=False, testing_epochs_to_print=10, testing_verbose=0):
+def evaluate_model(testing_n_samples, testing_num_steps, testing_temperature, problem_type, generator, criterion=None, 
+                   inference_to_backprop_ratio=1, complexity=2, cot=False, df=None, testing_steps_to_print=10, testing_verbose=0):
     losses    = []
     scores    = []
     responses = []
+    generator.model.eval()
     with torch.no_grad():
-        for epoch in range(testing_num_epochs):
+        for step in range(testing_num_steps):
+            if type(df) != type(None):
+                df_dialogs = df.iloc[step * (testing_n_samples * inference_to_backprop_ratio): (step + 1) * (testing_n_samples * inference_to_backprop_ratio)]
+            else:
+                df_dialogs = None
+
             loss, score, response_data = inference_step(n_samples=testing_n_samples, generator=generator,
                                                         temperature=testing_temperature, problem_type=problem_type, 
                                                         inference_to_backprop_ratio=inference_to_backprop_ratio, 
                                                         criterion=criterion, cot=cot, complexity=complexity, 
-                                                        verbose=testing_verbose)
+                                                        df_dialogs=df_dialogs, verbose=testing_verbose)
             losses += [loss]
             scores += [score]
             responses += [response_data]
-            if testing_epochs_to_print and testing_num_epochs // testing_epochs_to_print and not epoch % (testing_num_epochs // testing_epochs_to_print):
-                #print(f" -------------- Epoch {epoch}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}  -------------- ")
-                print(f" -------------- Epoch {epoch}, Loss: {loss}, Score: {score}  -------------- ")
+            if testing_steps_to_print and testing_num_steps // testing_steps_to_print and not step % (testing_num_steps // testing_steps_to_print):
+                print(f" -------------- Step {step}, Loss: {loss}, Score: {score}  -------------- ")
+
     return losses, scores, responses
 
 def plot_results(losses, scores, problem_type, bypass_symbolic):
@@ -680,13 +771,14 @@ def run_experiment(generator, config):
     temperature                         = config['temperature']
 
     train_model                         = config['train_model']
+    validate_model                      = config['validate_model']
     test_model                          = config['test_model']
     lora_baseline                       = config['lora_baseline']
     starting_skip_strength              = config['starting_skip_strength']
     problem_score_threshold             = config['problem_score_threshold']
     normalize_VSA_before_dot            = config['normalize_VSA_before_dot']
     rms_layer                           = config['rms_layer']
-    double_rep                          = config['double_rep']
+    single_number_generation            = config['single_number_generation']
     use_specific_identities             = config['use_specific_identities']
     initialize_decoders                 = config['initialize_decoders']
     normalize_vector                    = config['normalize_vector']
@@ -694,21 +786,29 @@ def run_experiment(generator, config):
     symbolic_decoding_layers            = config['symbolic_decoding_layers']
 
     num_epochs                          = config['num_epochs']
+    num_steps                           = config['num_steps']
     n_samples                           = config['n_samples']
     inference_to_backprop_ratio         = config['inference_to_backprop_ratio']
     trainable_skip                      = config['trainable_skip']
     learning_rate                       = config['learning_rate']
     learning_rate_reduction_factors     = config['learning_rate_reduction_factors']
-    epochs_to_print                     = config['epochs_to_print']
+    steps_to_print                      = config['steps_to_print']
     print_all_pts_freq                  = config['print_all_pts_freq']
     verbose                             = config['verbose']
 
+    val_num_steps                       = config['val_num_steps']
+    val_n_samples                       = config['val_n_samples']
+    val_temperature                     = config['val_temperature']
+    val_inference_to_backprop_ratio     = config['val_inference_to_backprop_ratio']
+    val_steps_to_print                  = config['val_steps_to_print']
+    val_verbose                         = config['val_verbose']
+
     testing_problems                    = config['testing_problems']
-    testing_num_epochs                  = config['testing_num_epochs']
+    testing_num_steps                   = config['testing_num_steps']
     testing_inference_to_backprop_ratio = config['testing_inference_to_backprop_ratio']
     testing_n_samples                   = config['testing_n_samples']
     testing_temperature                 = config['testing_temperature']
-    testing_epochs_to_print             = config['testing_epochs_to_print']
+    testing_steps_to_print              = config['testing_steps_to_print']
     testing_verbose                     = config['testing_verbose']
     record_score_per_problem            = config['record_score_per_problem']
     test_baseline                       = config['test_baseline']
@@ -729,30 +829,58 @@ def run_experiment(generator, config):
     save_responses                      = config['save_responses']
     simulate_perfect_encoder            = config['simulate_perfect_encoder']
     modify_question_format              = config['modify_question_format']
+    training_data_df_path               = config['training_data_df_path']
+    val_data_df_path                    = config['val_data_df_path']
+    testing_data_df_path                = config['testing_data_df_path']
 
     #######################################################################################
     ############################## Hyperparameter Definition ##############################
     #######################################################################################
 
     if "post_fine_tuning" in decoder_path:
+        print(f"Changing the value of initialize_decoders from {initialize_decoders} to False due to 'post_fine_tuning' being in the decoder_path")
         initialize_decoders = False
     
     if test_baseline == 2:
+        print(f"Changing the value of train_model from {train_model} to False due to test_baseline = {test_baseline}")
+        print(f"Changing the value of validate_model from {validate_model} to False due to test_baseline = {test_baseline}")
         train_model = False
+        validate_model = False
 
     if cot == True:
+        print(f"Changing the value of test_baseline from {test_baseline} to 2 due to cot = {cot}")
+        print(f"Changing the value of train_model from {train_model} to False due to cot = {cot}")
+        print(f"Changing the value of validate_model from {validate_model} to False due to cot = {cot}")
+        print(f"Changing the value of calculate_encoding_accuracy from {calculate_encoding_accuracy} to False due to cot = {cot}")
+        print(f"Changing the value of record_score_per_problem from {record_score_per_problem} to 0 due to cot = {cot}")
         test_baseline = 2
         train_model = False
+        validate_model = False
+        calculate_encoding_accuracy = False
+        record_score_per_problem = 0
 
     if test_on_unrelated_questions == True:
+        print(f"Changing the value of cot from {cot} to True due to test_on_unrelated_questions = {test_on_unrelated_questions}")
+        print(f"Changing testing_problems to non-math related subjects due to test_on_unrelated_questions = {test_on_unrelated_questions}")
+        print(f"Changing the value of test_baseline from {test_baseline} to True due to test_on_unrelated_questions = {test_on_unrelated_questions}")
+        print(f"Changing the value of calculate_encoding_accuracy from {calculate_encoding_accuracy} to False due to test_on_unrelated_questions = {test_on_unrelated_questions}")
+        print(f"Changing testing_data_df_path to "" due to test_on_unrelated_questions = {test_on_unrelated_questions}")
+        print(f"Changing the value of record_score_per_problem from {record_score_per_problem} to 2 due to test_model = {test_model}")
         cot = True
         testing_problems = ['philosophy', 'ethics', 'history', 'psychology', 'science_fiction', 'technology', 'art_and_culture']
-        test_baseline = 0
-        train_model = False
+        test_baseline = 1
+        calculate_encoding_accuracy = False
+        #training_data_df_path = ""
+        #val_data_df_path = ""
+        testing_data_df_path = ""
+        record_score_per_problem = 3
+        static_encoding = 0 # Set to false in order to get more samples for the testing phase
 
     if not test_model:
-        if record_score_per_problem == 2:
+        if record_score_per_problem:
+            print(f"Changing the value of record_score_per_problem from {record_score_per_problem} to 1 due to test_model = {test_model}")
             record_score_per_problem = 1
+            
 
     if type(problem_type) == list:
         losses_per_pt = {pt: [] for pt in problem_type}
@@ -771,21 +899,23 @@ def run_experiment(generator, config):
             os.mkdir(f"{curr_dir}/outputs")
 
     if record_score_per_problem == 1:
-        with open(f"{curr_dir}/outputs/score_per_problem_{wandb.run.id}.txt", "w") as file:
-            file.write("actual_problem_type,problem_type,score\n")
+        with open(f"{curr_dir}/outputs/score_per_problem_training_{wandb.run.id}.txt", "w") as file:
+            file.write("split,actual_problem_type,predicted_problem_type,score\n")
     if record_score_per_problem == 2:
+        with open(f"{curr_dir}/outputs/score_per_problem_testing_{wandb.run.id}.txt", "w") as file:
+            file.write("split,actual_problem_type,predicted_problem_type,score\n")
+    if record_score_per_problem == 3:
         with open(f"{curr_dir}/outputs/score_per_problem_training_and_testing_{wandb.run.id}.txt", "w") as file:
-            file.write("actual_problem_type,problem_type,score\n")
-
-    resume = False
+            file.write("split,actual_problem_type,predicted_problem_type,score\n")
 
     #################################################################################
     ############################## Model preprocessing ##############################
     #################################################################################
-    
 
-    generator.model.encoders = torch.load(encoder_path, weights_only=False)
-    generator.model.decoders = torch.load(decoder_path, weights_only=False)
+    # Leave this line before lora_baseline to create encoders and decoders randomly for lora,
+    #   add it after to overwrite with pretrained encoders and decoders
+    # generator.model.encoders = torch.load(encoder_path, weights_only=False) 
+    # generator.model.decoders = torch.load(decoder_path, weights_only=False)
 
     if lora_baseline:
         lora_encoders = nn.ModuleList()
@@ -800,8 +930,11 @@ def run_experiment(generator, config):
         generator.model.encoders = lora_encoders
         generator.model.decoders = lora_decoders
 
-        initialize_decoders = False
-        rms_layer = True
+        # initialize_decoders = False
+        # rms_layer = True
+
+    generator.model.encoders = torch.load(encoder_path, weights_only=False)
+    generator.model.decoders = torch.load(decoder_path, weights_only=False)
 
     generator.model.wandb_run_id                = wandb.run.id
 
@@ -814,7 +947,7 @@ def run_experiment(generator, config):
     generator.model.symbolic_decoding_layers    = symbolic_decoding_layers
     generator.model.normalize_vector            = normalize_vector
     generator.model.rms_layer                   = rms_layer
-    generator.model.double_rep                  = double_rep
+    generator.model.single_number_generation    = single_number_generation
     generator.model.complexity                  = complexity
         
     generator.model.lora_baseline               = lora_baseline
@@ -842,7 +975,7 @@ def run_experiment(generator, config):
     if generator.model.calculate_encoding_accuracy:
         # During training, calculate accuracy per problem type, per digit, per input number
         generator.model.encoding_accuracy = {}
-        for pt in problem_type:
+        for pt in generator.model.SE.possible_problems:
             generator.model.encoding_accuracy[pt] = {}
             for digit in range(complexity + 1):
                 generator.model.encoding_accuracy[pt]["digit " + str(digit)] = {}
@@ -918,102 +1051,154 @@ def run_experiment(generator, config):
 
 
     if train_model:
-        #############################################################################
-        ############################## Train the model ##############################
-        #############################################################################
+        responses = {}
 
-        if not resume:
+        for param in generator.model.parameters():
+            param.requires_grad = False
+        for sl in symbolic_decoding_layers:
+            for param in generator.model.decoders[sl-generator.model.starting_decoder_layer].parameters():
+                param.requires_grad = True
+        if lora_baseline:
+            for param in generator.model.encoders[symbolic_encoding_layer-generator.model.starting_encoder_layer].parameters():
+                param.requires_grad=True
+        if rms_layer:
+            for r_layer in generator.model.rms_layers:
+                for param in r_layer.parameters():
+                    param.requires_grad = True
+
+
+        if not rms_layer:
+            generator.model.skip_weights.requires_grad = trainable_skip
+
+        # Training loop
+
+        params = list(filter(lambda p: p.requires_grad, generator.model.parameters()))
+        print("Number of trainable parameters:", sum(p.numel() for p in params))
+
+        if not training_data_df_path:
+            use_existing_questions = False
+        else:
+            use_existing_questions = True
+            train_questions_df = pd.read_csv(training_data_df_path)
+            new_num_steps = math.ceil(len(train_questions_df) / (n_samples * inference_to_backprop_ratio)) # Change the number of steps so that the entire df is used once
+            print(f"Training dataframe with {len(train_questions_df)} rows detected, changing the number of steps from {num_steps} to {new_num_steps}")
+
+            num_steps = new_num_steps
+
+            # TODO: Temporary hack fix to set the number of sampes (n_samples) fed into the LLM to 1. This won't change performance, but forces the batch_size fed into the LLM to be 1
+            inference_to_backprop_ratio *= n_samples
+            n_samples = 1
+
+        if val_data_df_path:
+            val_questions_df = pd.read_csv(val_data_df_path)
+            new_num_steps = math.ceil(len(val_questions_df) / (val_n_samples * val_inference_to_backprop_ratio)) # Change the number of steps so that the entire df is used once
+            print(f"Validation dataframe with {len(val_questions_df)} rows detected, changing the number of steps from {val_num_steps} to {new_num_steps}")
+
+            val_num_steps = new_num_steps
+
+            # TODO: Temporary hack fix to set the number of sampes (n_samples) fed into the LLM to 1. This won't change performance, but forces the batch_size fed into the LLM to be 1
+            val_inference_to_backprop_ratio *= val_n_samples
+            val_n_samples = 1
+        else:
+            val_questions_df = None
+
+
+        optimizer = optim.Adam(filter(lambda p: p.requires_grad, generator.model.parameters()), lr=learning_rate)
+
+        #num_epochs = 1
+        for epoch in range(num_epochs):
+            generator.model.current_split = "train"
+
             losses = []
             scores = []
-            responses = {}
+            val_losses = []
+            val_scores = []
 
-            for param in generator.model.parameters():
-                param.requires_grad = False
-            for sl in symbolic_decoding_layers:
-                for param in generator.model.decoders[sl-generator.model.starting_decoder_layer].parameters():
-                    param.requires_grad = True
-            if lora_baseline:
-                for param in generator.model.encoders[symbolic_encoding_layer-generator.model.starting_encoder_layer].parameters():
-                    param.requires_grad=True
-            if rms_layer:
-                for r_layer in generator.model.rms_layers:
-                    for param in r_layer.parameters():
-                        param.requires_grad = True
+            print("On epoch:", epoch + 1)
+            for step in range(num_steps):
+                generator.model.train()
 
+                if step in learning_rate_reduction_factors.keys():
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = param_group['lr'] * learning_rate_reduction_factors[step]  # Set new learning rate
+                        print("Learning Rate changed to:", param_group['lr'])
 
-            if not rms_layer:
-                generator.model.skip_weights.requires_grad = trainable_skip
-
-            #original_weights = {}
-            #for name, param in generator.model.named_parameters():
-            #    for sl in symbolic_decoding_layers:
-            #        if f"decoders.{sl-generator.model.starting_decoder_layer}.decoder_layer" in name  or name == "layers.0.feed_forward.w1.weight":
-            #            original_weights[name] = param.clone().detach()
-
-            # Training loop
-
-            params = list(filter(lambda p: p.requires_grad, generator.model.parameters()))
-            print("Number of trainable parameters:", sum(p.numel() for p in params))
-        else:
-            print("Resuming training")
-        for epoch in range(num_epochs):
-            optimizer = optim.Adam(filter(lambda p: p.requires_grad, generator.model.parameters()), lr=learning_rate)
-            torch.autograd.set_detect_anomaly(True)
-
-            generator.model.train()
-            if epoch in learning_rate_reduction_factors.keys():
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = param_group['lr'] * learning_rate_reduction_factors[epoch]  # Set new learning rate
-                    print("Learning Rate changed to:", param_group['lr'])
-
-            loss, score, response_data = training_step(n_samples, generator, temperature=temperature, problem_type=problem_type, 
-                                                       inference_to_backprop_ratio=inference_to_backprop_ratio, optimizer=optimizer, criterion=criterion,
-                                                       complexity=complexity, losses_per_pt=losses_per_pt, scores_per_pt=scores_per_pt, verbose=verbose)
-
-            responses[epoch] = response_data
-
-            if save_responses:
-                if not responses:
-                    print("Warning: responses dict is empty — nothing to save!")
+                if use_existing_questions:
+                    df_dialogs = train_questions_df.iloc[step * (n_samples * inference_to_backprop_ratio): (step + 1) * (n_samples * inference_to_backprop_ratio)]
                 else:
-                    safe_pickle_dump(responses, f"outputs/responses_{wandb.run.id}.pkl")
+                    df_dialogs = None
 
+                loss, score, response_data = training_step(n_samples, generator, temperature=temperature, problem_type=problem_type, df_dialogs=df_dialogs,
+                                                           inference_to_backprop_ratio=inference_to_backprop_ratio, optimizer=optimizer, criterion=criterion,
+                                                           complexity=complexity, losses_per_pt=losses_per_pt, scores_per_pt=scores_per_pt, verbose=verbose)
 
-            losses += [loss]
-            scores += [score]
+                responses[step] = response_data
 
+                if save_responses:
+                    if not responses:
+                        print("Warning: responses dict is empty — nothing to save!")
+                    else:
+                        safe_pickle_dump(responses, f"outputs/responses_{wandb.run.id}.pkl")
+
+                losses += [loss]
+                scores += [score]
+
+                if log_wandb:
+                    wandb.log({
+                        "step": step,
+                        "loss":  loss,
+                        "score": score
+                    })
+
+                if not rms_layer:
+                    for n, sw in enumerate(generator.model.skip_weights.detach().cpu().float().numpy()):
+                        if log_wandb:
+                            wandb.log({f"skip_weights_{n}": sw})
+
+                if steps_to_print and num_steps // steps_to_print and not step % (num_steps // steps_to_print):
+                    if num_steps // steps_to_print >= 10:
+                        if not rms_layer and trainable_skip:
+                            print(f" -------------- Step {step}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}, Skip Weight: {generator.model.skip_weights.detach().cpu().float().numpy()}  -------------- ", flush=True)
+                        else:
+                            print(f" -------------- Step {step}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}  -------------- ", flush=True)
+                    else:
+                        if not rms_layer and trainable_skip:
+                            print(f" -------------- Step {step}, Loss: {loss}, Score: {score}, Skip Weight: {generator.model.skip_weights.detach().cpu().float().numpy()}  -------------- ", flush=True)
+                        else:
+                            print(f" -------------- Step {step}, Loss: {loss}, Score: {score}  -------------- ", flush=True)
+
+                if step and not step % print_all_pts_freq:
+                    print("~~~~~~~~~~~~~ Printing Stats Per Problem Type: ~~~~~~~~~~~~~")
+                    for pt in losses_per_pt:
+                        if len(losses_per_pt[pt]):
+                            print("    Problem type:", pt)
+                            print("    Loss:", np.mean(losses_per_pt[pt]), ", Score:", np.mean(scores_per_pt[pt]))
+            
             if log_wandb:
                 wandb.log({
                     "epoch": epoch,
-                    "loss":  loss,
-                    "score": score
+                    "mean_train_loss":  np.mean(losses),
+                    "mean_train_score": np.mean(scores)
                 })
-            
-            if not rms_layer:
-                for n, sw in enumerate(generator.model.skip_weights.detach().cpu().float().numpy()):
-                    if log_wandb:
-                        wandb.log({f"skip_weights_{n}": sw})
 
-            if epochs_to_print and num_epochs // epochs_to_print and not epoch % (num_epochs // epochs_to_print):
-                if num_epochs // epochs_to_print >= 10:
-                    if not rms_layer and trainable_skip:
-                        print(f" -------------- Epoch {epoch}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}, Skip Weight: {generator.model.skip_weights.detach().cpu().float().numpy()}""  -------------- ", flush=True)
-                    else:
-                        print(f" -------------- Epoch {epoch}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}  -------------- ", flush=True)
-                else:
-                    if not rms_layer and trainable_skip:
-                        print(f" -------------- Epoch {epoch}, Loss: {loss}, Score: {score}, Skip Weight: {generator.model.skip_weights.detach().cpu().float().numpy()}""  -------------- ", flush=True)
-                    else:
-                        print(f" -------------- Epoch {epoch}, Loss: {loss}, Score: {score}  -------------- ", flush=True)
+            if validate_model:
+                generator.model.current_split = "validation"
+                val_loss, val_score, responses  = evaluate_model(testing_n_samples=val_n_samples,
+                                                                 testing_num_steps=val_num_steps,
+                                                                 testing_temperature=val_temperature,
+                                                                 problem_type=pt, generator=generator, criterion=criterion,
+                                                                 inference_to_backprop_ratio=val_inference_to_backprop_ratio,
+                                                                 complexity=complexity, cot=cot, df=val_questions_df,
+                                                                 testing_steps_to_print=val_steps_to_print, testing_verbose=val_verbose)
 
-            if epoch and not epoch % print_all_pts_freq:
-                print("~~~~~~~~~~~~~ Printing Stats Per Problem Type: ~~~~~~~~~~~~~")
-                for pt in losses_per_pt:
-                    if len(losses_per_pt[pt]):
-                        print("    Problem type:", pt)
-                        print("    Loss:", np.mean(losses_per_pt[pt]), ", Score:", np.mean(scores_per_pt[pt]))
+                val_losses = [val_loss]
+                val_scores = [val_score]
 
-
+                if log_wandb:
+                    wandb.log({
+                        "mean_val_loss":  np.mean(val_losses),
+                        "mean_val_score": np.mean(val_scores)
+                    })
 
         ###################################################################################
         ############################## Plot Training Metrics ##############################
@@ -1035,26 +1220,26 @@ def run_experiment(generator, config):
 
             print("Skip Weight strength after training:", generator.model.skip_weights.detach().cpu().float().numpy())
 
-        plt.plot(create_smooth_data(np.array(scores), n=(epoch+1)//10))
-        #plt.title(f"Score vs Epoch (smoothing factor = {(epoch+1) // 10})")
-        plt.title(f"Score vs Epoch")
-        plt.xlabel("Epochs")
+        plt.plot(create_smooth_data(np.array(scores), n=(step+1)//10))
+        #plt.title(f"Score vs step (smoothing factor = {(step+1) // 10})")
+        plt.title(f"Score vs Step")
+        plt.xlabel("Steps")
         plt.ylabel("Score")
         if verbose:
             plt.show()
         if log_wandb:
-            wandb.log({"score_vs_epoch": wandb.Image(plt)})  # Log to wandb
+            wandb.log({"score_vs_step": wandb.Image(plt)})  # Log to wandb
         plt.close()
 
-        plt.plot(create_smooth_data(np.array(losses), n=(epoch+1)//10))
-        #plt.title(f"Loss vs Epoch (smoothing factor = {(epoch+1) // 10})")
-        plt.title(f"Loss vs Epoch")
-        plt.xlabel("Epochs")
+        plt.plot(create_smooth_data(np.array(losses), n=(step+1)//10))
+        #plt.title(f"Loss vs step (smoothing factor = {(step+1) // 10})")
+        plt.title(f"Loss vs Step")
+        plt.xlabel("Steps")
         plt.ylabel("Loss")
         if verbose:
             plt.show()
         if log_wandb:
-            wandb.log({"loss_vs_epoch": wandb.Image(plt)})  # Log to wandb
+            wandb.log({"loss_vs_step": wandb.Image(plt)})  # Log to wandb
         plt.close()
 
         if type(problem_type) == list:
@@ -1064,25 +1249,25 @@ def run_experiment(generator, config):
                 pt_losses = np.array(losses_per_pt[pt])
 
                 plt.plot(create_smooth_data(pt_scores, n=len(pt_scores)//10))
-                #plt.title(f"{pt} Score vs Epoch (smoothing factor = {len(pt_scores) // 10})")
-                plt.title(f"{pt} Score vs Epoch")
-                plt.xlabel("Epochs")
+                #plt.title(f"{pt} Score vs step (smoothing factor = {len(pt_scores) // 10})")
+                plt.title(f"{pt} Score vs Step")
+                plt.xlabel("Steps")
                 plt.ylabel("Score")
                 if verbose:
                     plt.show()
                 if log_wandb:
-                    wandb.log({f"{pt}_score_vs_epoch": wandb.Image(plt)})  # Log to wandb
+                    wandb.log({f"{pt}_score_vs_step": wandb.Image(plt)})  # Log to wandb
                 plt.close()
 
                 plt.plot(create_smooth_data(pt_losses, n=len(pt_losses)//10))
-                #plt.title(f"{pt} Loss vs Epoch (smoothing factor = {len(pt_losses) // 10})")
-                plt.title(f"{pt} Loss vs Epoch")
-                plt.xlabel("Epochs")
+                #plt.title(f"{pt} Loss vs step (smoothing factor = {len(pt_losses) // 10})")
+                plt.title(f"{pt} Loss vs Step")
+                plt.xlabel("Steps")
                 plt.ylabel("Loss")
                 if verbose:
                     plt.show()
                 if log_wandb:
-                    wandb.log({f"{pt}_loss_vs_epoch": wandb.Image(plt)})  # Log to wandb
+                    wandb.log({f"{pt}_loss_vs_step": wandb.Image(plt)})  # Log to wandb
                 plt.close()
 
                 print("Final Score and Loss:", np.mean(pt_scores[:-10]), np.mean(pt_losses[:-10]))
@@ -1090,32 +1275,77 @@ def run_experiment(generator, config):
                     wandb.log({f"final_score_{pt}": np.mean(pt_scores[:-10])})  # Log to wandb
                     wandb.log({f"final_loss_{pt}" : np.mean(pt_losses[:-10])})  # Log to wandb
 
+        if validate_model:
+            plt.plot(create_smooth_data(np.array(val_scores), n=(step+1)//10))
+            #plt.title(f"Score vs step (smoothing factor = {(step+1) // 10})")
+            plt.title(f"Validation Score vs Step")
+            plt.xlabel("Steps")
+            plt.ylabel("Score")
+            if verbose:
+                plt.show()
+            if log_wandb:
+                wandb.log({"validation_score_vs_step": wandb.Image(plt)})  # Log to wandb
+            plt.close()
+
+            plt.plot(create_smooth_data(np.array(val_losses), n=(step+1)//10))
+            #plt.title(f"Loss vs step (smoothing factor = {(step+1) // 10})")
+            plt.title(f"Validation Loss vs Step")
+            plt.xlabel("Steps")
+            plt.ylabel("Loss")
+            if verbose:
+                plt.show()
+            if log_wandb:
+                wandb.log({"validation_loss_vs_step": wandb.Image(plt)})  # Log to wandb
+            plt.close()
+
+
+        print("Training Complete")
 
     #####################################################################
     ############################## Testing ##############################
     #####################################################################
 
     if test_model:
+        generator.model.current_split = "test"
+
         testing_losses_per_pt_SYM = {}
         testing_losses_per_pt_LLM = {}
         testing_scores_per_pt_SYM = {}
         testing_scores_per_pt_LLM = {}
         
+        if not testing_data_df_path:
+            use_existing_questions = False
+        else:
+            use_existing_questions = True
+            test_questions_df = pd.read_csv(testing_data_df_path)
 
 
         for pt in testing_problems:
             print("~~~~~~~~ Problem Type:", pt, "~~~~~~~~")
+            if use_existing_questions:
+                pt_df = test_questions_df[test_questions_df.problem_type == pt]
+                new_num_steps = math.ceil(len(pt_df) / (testing_n_samples * testing_inference_to_backprop_ratio)) # Change the number of steps so that the entire df is used once
+                print(f"Testing dataframe of problem type {pt} with {len(pt_df)} rows detected, changing the number of steps from {testing_num_steps} to {new_num_steps}")
+
+                testing_num_steps = new_num_steps
+
+                # TODO: Temporary hack fix to set the number of samples (n_samples) fed into the LLM to 1. This won't change performance, but forces the batch_size fed into the LLM to be 1
+                testing_inference_to_backprop_ratio *= testing_n_samples
+                testing_n_samples = 1
+            else:
+                pt_df = None
+
             if test_baseline != 2:
                 # Symbolic LLM
                 generator.model.bypass_symbolic = False
                 generator.model.add_noise       = False
                 losses, scores, responses  = evaluate_model(testing_n_samples=testing_n_samples,
-                                                            testing_num_epochs=testing_num_epochs,
+                                                            testing_num_steps=testing_num_steps,
                                                             testing_temperature=testing_temperature,
                                                             problem_type=pt, generator=generator, criterion=criterion,
                                                             inference_to_backprop_ratio=testing_inference_to_backprop_ratio,
-                                                            complexity=complexity, cot=cot,
-                                                            testing_epochs_to_print=testing_epochs_to_print, testing_verbose=testing_verbose)
+                                                            complexity=complexity, cot=cot, df=pt_df,
+                                                            testing_steps_to_print=testing_steps_to_print, testing_verbose=testing_verbose)
 
                 testing_losses_per_pt_SYM[pt] = losses
                 testing_scores_per_pt_SYM[pt] = scores
@@ -1133,12 +1363,12 @@ def run_experiment(generator, config):
                 generator.model.bypass_symbolic = True
                 generator.model.add_noise       = False
                 losses, scores, responses  = evaluate_model(testing_n_samples=testing_n_samples,
-                                                            testing_num_epochs=testing_num_epochs,
+                                                            testing_num_steps=testing_num_steps,
                                                             testing_temperature=testing_temperature,
                                                             problem_type=pt, generator=generator, criterion=criterion,
                                                             inference_to_backprop_ratio=testing_inference_to_backprop_ratio,
-                                                            complexity=complexity, cot=cot,
-                                                            testing_epochs_to_print=testing_epochs_to_print, testing_verbose=testing_verbose)
+                                                            complexity=complexity, cot=cot, df=pt_df,
+                                                            testing_steps_to_print=testing_steps_to_print, testing_verbose=testing_verbose)
                 testing_losses_per_pt_LLM[pt] = losses
                 testing_scores_per_pt_LLM[pt] = scores
 
@@ -1174,6 +1404,11 @@ def run_experiment(generator, config):
                     wandb.log({f"{pt}_standard_loss_histogram": wandb.Image(plt)})  # Log to wandb
                 plt.close()
 
+    #####################################################################
+    ############################ Other Plots ############################
+    #####################################################################
+
+
     if generator.model.calculate_encoding_accuracy:
         average_accuracy_per_pt = {}
 
@@ -1190,10 +1425,10 @@ def run_experiment(generator, config):
                 average_accuracy_per_pt[pt][d][0] = np.mean(generator.model.encoding_accuracy[pt][d]["first_number"])*100
                 average_accuracy_per_pt[pt][d][1] = np.mean(generator.model.encoding_accuracy[pt][d]["second_number"])*100
                 
-                curr_min = min(np.mean(generator.model.encoding_accuracy[pt][d]["first_number"])*100,
-                            np.mean(generator.model.encoding_accuracy[pt][d]["second_number"])*100)
-                curr_max = max(np.mean(generator.model.encoding_accuracy[pt][d]["first_number"])*100,
-                            np.mean(generator.model.encoding_accuracy[pt][d]["second_number"])*100)
+                curr_min = min(np.mean(generator.model.encoding_accuracy[pt][d]["first_number"])  * 100,
+                               np.mean(generator.model.encoding_accuracy[pt][d]["second_number"]) * 100)
+                curr_max = max(np.mean(generator.model.encoding_accuracy[pt][d]["first_number"])  * 100,
+                               np.mean(generator.model.encoding_accuracy[pt][d]["second_number"]) * 100)
 
                 if minval > curr_min:
                     minval = curr_min
@@ -1207,8 +1442,8 @@ def run_experiment(generator, config):
         colors = ['blue', 'orange']
 
         # Create subplots (one per problem type)
-        fig, axes = plt.subplots(nrows=2, ncols=4, figsize=(18, 10))  # Adjust grid based on the number of problem types
-        axes = axes.flatten()  # Flatten to index easier
+        fig, axes = plt.subplots(nrows=2, ncols=5, figsize=(18, 10))  # Adjust grid based on the number of problem types
+        axes = axes.flatten()
 
         for i, (problem_type, digits_data) in enumerate(average_accuracy_per_pt.items()):
             ax = axes[i]
@@ -1275,15 +1510,17 @@ def run_experiment(generator, config):
 
     if record_score_per_problem and test_baseline != 2 and not lora_baseline:
         if record_score_per_problem == 1:
-            file_path = f"{curr_dir}/outputs/score_per_problem_{wandb.run.id}.txt"
+            file_path = f"{curr_dir}/outputs/score_per_problem_training_{wandb.run.id}.txt"
         if record_score_per_problem == 2:
+            file_path = f"{curr_dir}/outputs/score_per_problem_testing_{wandb.run.id}.txt"
+        if record_score_per_problem == 3:
             file_path = f"{curr_dir}/outputs/score_per_problem_training_and_testing_{wandb.run.id}.txt"
 
         df = pd.read_csv(file_path)
         #os.remove(file_path)
 
-        df['training_item'] = [i for i in range(len(df) // len(generator.model.training_problems)) 
-                                 for j in range(len(generator.model.training_problems))]
+        df['training_item'] = [i for i in range(len(df) // len(generator.model.SE.possible_problems)) 
+                                 for j in range(len(generator.model.SE.possible_problems))]
 
         untrained_pts = sorted(list(set(config['testing_problems']) - set(generator.model.training_problems)))
         trained_pts   = generator.model.training_problems
@@ -1293,12 +1530,14 @@ def run_experiment(generator, config):
             if len(df[df.actual_problem_type.isin([pt])]) == 0:
                 continue
             leg += [pt]
+            # Maximum score per question, for actual_problem_type == pt rows
             plt.hist(df[df.actual_problem_type.isin([pt])].pivot_table(
                 index="training_item", values="score", aggfunc=np.max).score, bins=bins, histtype="step")
         for pt in trained_pts:
             if len(df[df.actual_problem_type.isin([pt])]) == 0:
                 continue
             leg += [pt]
+            # Maximum score per question, for actual_problem_type == pt rows
             plt.hist(df[df.actual_problem_type.isin([pt])].  pivot_table(
                 index="training_item", values="score", aggfunc=np.max).score, bins=bins, histtype="step")
         plt.xlabel("Dot product similarity")
@@ -1312,10 +1551,13 @@ def run_experiment(generator, config):
 
         bins = 100
         if df[df.actual_problem_type.isin(untrained_pts)].shape[0]:
+            # Maximum score per question, for untrained problem type rows
             plt.hist(df[df.actual_problem_type.isin(untrained_pts)].pivot_table(
                 index="training_item", values="score", aggfunc=np.max).score, bins=bins, histtype="step")
-        plt.hist(df[df.actual_problem_type.isin(trained_pts)].  pivot_table(
-            index="training_item", values="score", aggfunc=np.max).score, bins=bins, histtype="step")
+        if df[df.actual_problem_type.isin(trained_pts)].shape[0]:
+            # Maximum score per question, for trained problem type rows
+            plt.hist(df[df.actual_problem_type.isin(trained_pts)].  pivot_table(
+                index="training_item", values="score", aggfunc=np.max).score, bins=bins, histtype="step")
         plt.xlabel("Dot product similarity")
         plt.ylabel("Number of Samples")
         plt.legend(["Problems not seen during training", "Problems seen during training"], loc="upper left")
@@ -1334,7 +1576,7 @@ def run_experiment(generator, config):
         else:
             if log_wandb:
                 wandb.log({"trained_problem_scores":   df[df.actual_problem_type.isin(trained_pts)]  .pivot_table(
-                               index="training_item", values="score", aggfunc=np.max).score.tolist()})
+                    index="training_item", values="score", aggfunc=np.max).score.tolist()})
 
         result = (
             df[df.actual_problem_type.isin(trained_pts)].groupby("training_item")
@@ -1344,9 +1586,9 @@ def run_experiment(generator, config):
 
         if testing_verbose:
             print("Number of trained problems with different actual problem types and maximum score identified problem types:", 
-                  sum(result['actual_problem_type'] != result['problem_type']))
+                  sum(result['actual_problem_type'] != result['predicted_problem_type']))
         if log_wandb:
-            wandb.log({"different_actual_problem_types_count": sum(result['actual_problem_type'] != result['problem_type'])})
+            wandb.log({"different_actual_problem_types_count": sum(result['actual_problem_type'] != result['predicted_problem_type'])})
 
 
 
@@ -1362,46 +1604,48 @@ def initialize_default_config():
     complexity   = 2 # Complexity of problems to ask, represented by number of digits + 1 (of x and y)
     temperature  = 0 # Temperature of LLM during training
 
-    train_model              = True  # If false, then only do testing step
-    test_model               = True  # IF false, then only do training step
+    train_model              = True  # If false, then do the testing step
+    validate_model           = True  # If false, then do the validation step
+    test_model               = True  # IF false, then do the training step
     lora_baseline            = False # If True,  instead of running symbolic encoder-decoder architecture, run a lora module
-    starting_skip_strength   = 0.5   # The the starting strength of skip connections (0 is all symbolic, 1 is all LLM)
+    starting_skip_strength   = 0.5   # The starting strength of skip connections (0 is all symbolic, 1 is all LLM)
     problem_score_threshold  = 0.8   # If the similarity between the problem type is less than this value, don't us symbolic model
-    normalize_VSA_before_dot = False # If true,  normalize VSA (from encoder) before doing a dot product with different problem types
-    initialize_decoders      = True  # If true,  initialize decoders as the pseudo-inverse of the encoders
-    normalize_vector         = False # If true,  normalize the output vector (whether it's noise or the solution hidden state)
-    rms_layer                = False # If true,  then fixed_skip is not used
-    double_rep               = True  # If true,  the solution is represented as n1 bound with the solution plus n2 bound with 0
-    use_specific_identities  = False # If true,  the solution is represented as n1 bound with the identity of n1 under each specific operation (makes double_rep=False)
+    normalize_VSA_before_dot = False # If true, normalize VSA (from encoder) before doing a dot product with different problem types
+    initialize_decoders      = True  # If true, initialize decoders as the pseudo-inverse of the encoders
+    normalize_vector         = False # If true, normalize the output vector (whether it's noise or the solution hidden state)
+    rms_layer                = False # If true, then fixed_skip is not used
+    single_number_generation = True  # If true, the solution is represented as n1 bound with the solution plus n2 bound with 0
+    use_specific_identities  = False # If true, the solution is represented as n1 bound with the identity of n1 under each specific operation (makes single_number_generation=False)
     trainable_skip           = False # If false, then this will allow the strength of the mixing ratio to be learnable
     symbolic_encoding_layer  =  17   # Layer to use while generating symbolic vector of n1 and n2
     symbolic_decoding_layers = [17]  # Layer to apply decoding network
 
     # Total batch size is inference_to_backprop_ratio * n_samples
+    num_epochs                  = 1 # Only meaningful is you are training from a pre-generated dataset
     n_samples                   = max_batch_size # should be less or equal to  than params.max_batch_size
     inference_to_backprop_ratio = 8 # Batch size is effectively n_samples * inference_to_backprop_ratio
-    num_epochs                  = 1000
+    num_steps                   = 1000
 
     learning_rate                   = 1e-3 # Base learning rate, modified by learning_rate_reduction_factors
     learning_rate_reduction_factors = {100: 0.5, 500:  0.5, 1000: 0.4, 2000: 0.1, 4000: 0.5, 6000: 0.5, 8000: 0.5}
 
-    epochs_to_print    = num_epochs // 100 # How many epochs to print. If greater than 10, running averages will be printed
+    steps_to_print     = num_steps // 100 # How many steps to print. If greater than 10, running averages will be printed
     print_all_pts_freq = 100 # If multiple problem types are present, this is the frequency to print performance per problem type
     verbose            = 0 # verbose=0 means no prints, verbose=1 means print the first row in batch data, verbose=2 means print all batch data
 
     # Testing Hyperparameters
     testing_problems                    = ['addition', 'division', 'multiplication', 'modulo', 'gcd',
                                            'lcm', 'square_mod', 'bitwise_and', 'bitwise_xor', 'bitwise_or']
-    testing_num_epochs                  = 100
+    testing_num_steps                  = 100
     testing_inference_to_backprop_ratio = 1
     testing_n_samples                   = max_batch_size # should be less than or equal to params.max_batch_size
 
     testing_temperature      = 0 # Temperature to use when testing model 
-    testing_epochs_to_print  = 0 # If multiple problem types are present, this is the frequency to print performance per problem type
+    testing_steps_to_print   = 0 # If multiple problem types are present, this is the frequency to print performance per problem type
     testing_verbose          = 0 # verbose=0 means no prints, verbose=1 means print the first row in batch data, verbose=2 means print all batch data
-    record_score_per_problem = 2 # If 2/1/0, during testing/training+testing/neither, store the problem type and score info per sample
+    record_score_per_problem = 2 # If 3/2/1/0, during training+testing/testing/training/neither, store the problem type and score info per sample
 
-    test_baseline = 0 # 0 means only test trained LLM, 1 means both test trained LLM and do baseline, 2 means only test baseline
+    test_baseline = 0 # 0 means only test NS-LLM (with symbolic intervention), 1 means both test NS-LLM and base LLM, 2 means only test base LLM (with no symbolic intervention)
     cot           = False # whether to use Chain of Thought prompting
     
     test_on_unrelated_questions = False
@@ -1411,7 +1655,7 @@ def initialize_default_config():
 
     encoder_input_tokens = 1     # The number of tokens the encoder expects as input (default is 1)
     calculate_end_index  = False # If set to "all", number of encoder input tokens will be generated dynamically
-    
+
     multi_token_intervention    = False # If True, perform intervention over multiple output tokens
     static_encoding             = True  # If True, instead of recomputing symbolic representation for future tokens, use the initial encoding
     calculate_encoding_accuracy = True  # If True, calculate the encoding accuracy per problem type per digit
@@ -1421,6 +1665,10 @@ def initialize_default_config():
     save_responses              = True  # If True, save the output information (model guesses, actual answers, losses) during training to file
     simulate_perfect_encoder    = False # If True, bypass the encoder and copy the actual numbers related to the question into the symbolic algorithms
     modify_question_format      = False # If True, modify the manner in which questions are asked (e.g., ask "What is 12 * 32" or "Multiply 12 and 32" instead of "What is 12 times 32")
+
+    training_data_df_path = "" # If you want to run the model with a pre-generated training dataframe (a csv file with columns problem_type, question, x, y, solution), specify the path. If not, set it to ""
+    val_data_df_path      = "" # If you want to run the model with a pre-generated validation dataframe (a csv file with columns problem_type, question, x, y, solution), specify the path. If not, set it to ""
+    testing_data_df_path  = "" # If you want to run the model with a pre-generated testing dataframe (a csv file with columns problem_type, question, x, y, solution), specify the path. If not, set it to ""
 
     config = {
         'encoder_path'                        : encoder_path,
@@ -1432,6 +1680,7 @@ def initialize_default_config():
         'temperature'                         : temperature,
 
         'train_model'                         : train_model,
+        'validate_model'                      : validate_model,
         'test_model'                          : test_model,
         'lora_baseline'                       : lora_baseline,
         'starting_skip_strength'              : starting_skip_strength,
@@ -1440,29 +1689,30 @@ def initialize_default_config():
         'initialize_decoders'                 : initialize_decoders,
         'normalize_vector'                    : normalize_vector,
         'rms_layer'                           : rms_layer,
-        'double_rep'                          : double_rep,
+        'single_number_generation'            : single_number_generation,
         'use_specific_identities'             : use_specific_identities,
         'trainable_skip'                      : trainable_skip,
         'symbolic_encoding_layer'             : symbolic_encoding_layer,
         'symbolic_decoding_layers'            : symbolic_decoding_layers,
 
         'num_epochs'                          : num_epochs,
+        'num_steps'                           : num_steps,
         'n_samples'                           : n_samples,
         'inference_to_backprop_ratio'         : inference_to_backprop_ratio,
         'learning_rate'                       : learning_rate,
         'learning_rate_reduction_factors'     : learning_rate_reduction_factors,
 
-        'epochs_to_print'                     : epochs_to_print,
+        'steps_to_print'                      : steps_to_print,
         'print_all_pts_freq'                  : print_all_pts_freq,
         'verbose'                             : verbose,
 
         'testing_problems'                    : testing_problems,
-        'testing_num_epochs'                  : testing_num_epochs,
+        'testing_num_steps'                   : testing_num_steps,
         'testing_inference_to_backprop_ratio' : testing_inference_to_backprop_ratio,
         'testing_n_samples'                   : testing_n_samples,
 
         'testing_temperature'                 : testing_temperature,
-        'testing_epochs_to_print'             : testing_epochs_to_print,
+        'testing_steps_to_print'              : testing_steps_to_print,
         'testing_verbose'                     : testing_verbose,
         'record_score_per_problem'            : record_score_per_problem,
 
@@ -1483,6 +1733,10 @@ def initialize_default_config():
         'save_responses'                      : save_responses,
         'simulate_perfect_encoder'            : simulate_perfect_encoder,
         'modify_question_format'              : modify_question_format,
+
+        'training_data_df_path'               : training_data_df_path,
+        'val_data_df_path'                    : val_data_df_path,
+        'testing_data_df_path'                : testing_data_df_path,
     }
 
 
@@ -1503,29 +1757,6 @@ else:
 
 
 config['encoder_input_tokens'] = config['encoder_input_tokens'] if config['encoder_input_tokens'] == "all" else int(config['encoder_input_tokens'])
-
-
-if log_wandb:
-    wandb.finish() # If there is an active current run, terminate it
-
-#config["encoder_input_tokens"] = 1
-#config["initialize_decoders"] = True
-#config["symbolic_encoding_layer"] = 17
-#config["symbolic_decoding_layers"] = [17]
-
-# #config["verbose"] = 2
-# #config["epochs_to_print"] = config["num_epochs"]
-
-# #config['test_with_non_numerical_rep'] = True
-# #config['train_model'] = False
-
-# #config["testing_verbose"] = 2
-#config["multi_token_intervention"]    = False
-#config['static_encoding']             = False
-
-#config["calculate_encoding_accuracy"] = True
-# #config["n_samples"] = 1
-# #config["verbose"] = 2
 
 
 if log_wandb:

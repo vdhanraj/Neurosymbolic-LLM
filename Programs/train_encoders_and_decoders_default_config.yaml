@@ -34,11 +34,12 @@ possible_problems:
 
 # === Data Collection ===
 train_data_rounds: 10000
-val_data_rounds: 1000
+val_data_rounds: 100
 test_data_rounds: 1000
-restrict_train_dataset: 10000
-restrict_testdataset: 1000
-save_frequency: 20
+restrict_train_dataset: 0
+restrict_val_dataset: 0
+restrict_test_dataset: 0
+save_frequency: 50
 layer_numbers: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
                 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
 complexity: 2
@@ -59,7 +60,7 @@ calculate_end_index: 0
 
 # === Encoder/Decoder Training ===
 encoder_decoder_batch_size: 512
-training_epochs: 10000
+training_epochs: 1000
 learning_rate: 0.001
 learning_rate_reduction_factors:
   50: 0.5
@@ -76,6 +77,6 @@ decoding_learning_rate_reduction_factors:
   100: 0.5
   250: 0.4
 
-training_data_df_path: "~/Symbolic-Math-Dataset/datasets/symbolic_math_dataset_2_complexity_10000_training_samples.csv"
-val_data_df_path: "~/Symbolic-Math-Dataset/datasets/symbolic_math_dataset_2_complexity_100_validation_samples.csv"
-testing_data_df_path: "~/Symbolic-Math-Dataset/datasets/symbolic_math_dataset_2_complexity_1000_testing_samples.csv"
+training_data_df_path: ''
+val_data_df_path: ''
+testing_data_df_path: ''
