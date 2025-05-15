@@ -1,5 +1,8 @@
 # Neurosymbolic LLM
 
+![Model Diagram](drawio_diagram.png)
+
+
 This repository implements the method described in the following paper:  [https://www.arxiv.org/pdf/2502.01657](https://www.arxiv.org/pdf/2502.01657)
 
 ## Setup
