@@ -17,6 +17,7 @@ train_model: true
 validate_model: true
 test_model: true
 lora_baseline: false
+initialize_lora: false
 starting_skip_strength: 0.5
 problem_score_threshold: 0.8
 normalize_VSA_before_dot: false

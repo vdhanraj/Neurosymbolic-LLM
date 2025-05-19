@@ -5,6 +5,7 @@ chpt_dir: "~/.llama/checkpoints/Llama3.1-8B-Instruct"
 tokenizer_path: "~/.llama/checkpoints/Llama3.1-8B-Instruct/tokenizer.model"
 generate_data: 1
 log_wandb: 1
+gpu_seed: 0
 
 # === Model Config ===
 max_seq_len: 10000

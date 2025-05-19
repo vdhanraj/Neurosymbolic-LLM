@@ -103,6 +103,7 @@ parser.add_argument("--train_model",               type=str2bool,  default=confi
 parser.add_argument("--validate_model",            type=str2bool,  default=config_defaults.get("validate_model"), required=False)
 parser.add_argument("--test_model",                type=str2bool,  default=config_defaults.get("test_model"),  required=False)
 parser.add_argument("--lora_baseline",             type=str2bool,  default=config_defaults.get("lora_baseline"), required=False)
+parser.add_argument("--initialize_lora",             type=str2bool,  default=config_defaults.get("initialize_lora"), required=False)
 parser.add_argument("--starting_skip_strength",    type=float, default=config_defaults.get("starting_skip_strength"), required=False)
 parser.add_argument("--problem_score_threshold",   type=float, default=config_defaults.get("problem_score_threshold"), required=False)
 parser.add_argument("--normalize_VSA_before_dot",  type=str2bool,  default=config_defaults.get("normalize_VSA_before_dot"), required=False)
@@ -409,6 +410,7 @@ def training_step(n_samples, generator, temperature=0, problem_type="addition", 
     max_len = max(t.size(0) for t in all_logits)
     padded_tensors = []
     for t in all_logits:
+        #print("T_SHAPE:", t.shape, len(all_logits))
         T, B, V = t.shape
         pad_amount = max_len - T
         t_padded = F.pad(t, (0, 0, 0, 0, 0, pad_amount), value=0)
@@ -774,6 +776,7 @@ def run_experiment(generator, config):
     validate_model                      = config['validate_model']
     test_model                          = config['test_model']
     lora_baseline                       = config['lora_baseline']
+    initialize_lora                     = config['initialize_lora']
     starting_skip_strength              = config['starting_skip_strength']
     problem_score_threshold             = config['problem_score_threshold']
     normalize_VSA_before_dot            = config['normalize_VSA_before_dot']
@@ -874,7 +877,6 @@ def run_experiment(generator, config):
         #val_data_df_path = ""
         testing_data_df_path = ""
         record_score_per_problem = 3
-        static_encoding = 0 # Set to false in order to get more samples for the testing phase
 
     if not test_model:
         if record_score_per_problem:
@@ -912,29 +914,32 @@ def run_experiment(generator, config):
     ############################## Model preprocessing ##############################
     #################################################################################
 
-    # Leave this line before lora_baseline to create encoders and decoders randomly for lora,
-    #   add it after to overwrite with pretrained encoders and decoders
-    # generator.model.encoders = torch.load(encoder_path, weights_only=False) 
-    # generator.model.decoders = torch.load(decoder_path, weights_only=False)
+
+    if not initialize_lora:
+        generator.model.encoders = torch.load(encoder_path, weights_only=False) 
+        generator.model.decoders = torch.load(decoder_path, weights_only=False)
 
     if lora_baseline:
         lora_encoders = nn.ModuleList()
         lora_decoders = nn.ModuleList()
-        for layer_id in torch.stack([generator.model.encoders[i].layer_id for i in range(len(generator.model.encoders))]):
-            # Assume that linear encoder and decoder networks are used
-            lora_encoder = Encoder(layer_id, generator.model.output.weight.shape[1], generator.model.SE.VSA_dim).to(device)
-            lora_decoder = Decoder(layer_id, generator.model.SE.VSA_dim, generator.model.output.weight.shape[1]).to(device)
-            lora_encoders.append(lora_encoder)
-            lora_decoders.append(lora_decoder)
+        # If generator.model.encoders is not None, initialize them as random networks
+        if not initialize_lora:
+            for layer_id in torch.stack([generator.model.encoders[i].layer_id for i in range(len(generator.model.encoders))]):
+                # Assume that linear encoder and decoder networks are used
+                lora_encoder = Encoder(layer_id, generator.model.output.weight.shape[1], generator.model.SE.VSA_dim).to(device)
+                lora_decoder = Decoder(layer_id, generator.model.SE.VSA_dim, generator.model.output.weight.shape[1]).to(device)
+                lora_encoders.append(lora_encoder)
+                lora_decoders.append(lora_decoder)
 
-        generator.model.encoders = lora_encoders
-        generator.model.decoders = lora_decoders
+            generator.model.encoders = lora_encoders
+            generator.model.decoders = lora_decoders
 
         # initialize_decoders = False
         # rms_layer = True
 
-    generator.model.encoders = torch.load(encoder_path, weights_only=False)
-    generator.model.decoders = torch.load(decoder_path, weights_only=False)
+    if initialize_lora:
+        generator.model.encoders = torch.load(encoder_path, weights_only=False)
+        generator.model.decoders = torch.load(decoder_path, weights_only=False)
 
     generator.model.wandb_run_id                = wandb.run.id
 
@@ -1105,22 +1110,21 @@ def run_experiment(generator, config):
 
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, generator.model.parameters()), lr=learning_rate)
 
-        #num_epochs = 1
+        losses = []
+        scores = []
+        val_losses = []
+        val_scores = []
         for epoch in range(num_epochs):
             generator.model.current_split = "train"
 
-            losses = []
-            scores = []
-            val_losses = []
-            val_scores = []
 
             print("On epoch:", epoch + 1)
             for step in range(num_steps):
                 generator.model.train()
 
-                if step in learning_rate_reduction_factors.keys():
+                if step + num_steps * epoch in learning_rate_reduction_factors.keys():
                     for param_group in optimizer.param_groups:
-                        param_group['lr'] = param_group['lr'] * learning_rate_reduction_factors[step]  # Set new learning rate
+                        param_group['lr'] = param_group['lr'] * learning_rate_reduction_factors[step + num_steps * epoch]  # Set new learning rate
                         print("Learning Rate changed to:", param_group['lr'])
 
                 if use_existing_questions:
@@ -1132,7 +1136,7 @@ def run_experiment(generator, config):
                                                            inference_to_backprop_ratio=inference_to_backprop_ratio, optimizer=optimizer, criterion=criterion,
                                                            complexity=complexity, losses_per_pt=losses_per_pt, scores_per_pt=scores_per_pt, verbose=verbose)
 
-                responses[step] = response_data
+                responses[step + num_steps * epoch] = response_data
 
                 if save_responses:
                     if not responses:
@@ -1145,7 +1149,7 @@ def run_experiment(generator, config):
 
                 if log_wandb:
                     wandb.log({
-                        "step": step,
+                        "step": step + num_steps * epoch,
                         "loss":  loss,
                         "score": score
                     })
@@ -1155,19 +1159,19 @@ def run_experiment(generator, config):
                         if log_wandb:
                             wandb.log({f"skip_weights_{n}": sw})
 
-                if steps_to_print and num_steps // steps_to_print and not step % (num_steps // steps_to_print):
+                if steps_to_print and num_steps // steps_to_print and not (step + num_steps * epoch) % (num_steps // steps_to_print):
                     if num_steps // steps_to_print >= 10:
                         if not rms_layer and trainable_skip:
-                            print(f" -------------- Step {step}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}, Skip Weight: {generator.model.skip_weights.detach().cpu().float().numpy()}  -------------- ", flush=True)
+                            print(f" -------------- Step {(step + num_steps * epoch)}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}, Skip Weight: {generator.model.skip_weights.detach().cpu().float().numpy()}  -------------- ", flush=True)
                         else:
-                            print(f" -------------- Step {step}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}  -------------- ", flush=True)
+                            print(f" -------------- Step {(step + num_steps * epoch)}, Loss: {np.mean(losses)}, Score: {np.mean(scores)}  -------------- ", flush=True)
                     else:
                         if not rms_layer and trainable_skip:
-                            print(f" -------------- Step {step}, Loss: {loss}, Score: {score}, Skip Weight: {generator.model.skip_weights.detach().cpu().float().numpy()}  -------------- ", flush=True)
+                            print(f" -------------- Step {(step + num_steps * epoch)}, Loss: {loss}, Score: {score}, Skip Weight: {generator.model.skip_weights.detach().cpu().float().numpy()}  -------------- ", flush=True)
                         else:
-                            print(f" -------------- Step {step}, Loss: {loss}, Score: {score}  -------------- ", flush=True)
+                            print(f" -------------- Step {(step + num_steps * epoch)}, Loss: {loss}, Score: {score}  -------------- ", flush=True)
 
-                if step and not step % print_all_pts_freq:
+                if (step + num_steps * epoch) and not (step + num_steps * epoch) % print_all_pts_freq:
                     print("~~~~~~~~~~~~~ Printing Stats Per Problem Type: ~~~~~~~~~~~~~")
                     for pt in losses_per_pt:
                         if len(losses_per_pt[pt]):
@@ -1183,13 +1187,13 @@ def run_experiment(generator, config):
 
             if validate_model:
                 generator.model.current_split = "validation"
-                val_loss, val_score, responses  = evaluate_model(testing_n_samples=val_n_samples,
-                                                                 testing_num_steps=val_num_steps,
-                                                                 testing_temperature=val_temperature,
-                                                                 problem_type=pt, generator=generator, criterion=criterion,
-                                                                 inference_to_backprop_ratio=val_inference_to_backprop_ratio,
-                                                                 complexity=complexity, cot=cot, df=val_questions_df,
-                                                                 testing_steps_to_print=val_steps_to_print, testing_verbose=val_verbose)
+                val_loss, val_score, response_data  = evaluate_model(testing_n_samples=val_n_samples,
+                                                                     testing_num_steps=val_num_steps,
+                                                                     testing_temperature=val_temperature,
+                                                                     problem_type=pt, generator=generator, criterion=criterion,
+                                                                     inference_to_backprop_ratio=val_inference_to_backprop_ratio,
+                                                                     complexity=complexity, cot=cot, df=val_questions_df,
+                                                                     testing_steps_to_print=val_steps_to_print, testing_verbose=val_verbose)
 
                 val_losses = [val_loss]
                 val_scores = [val_score]
@@ -1304,6 +1308,11 @@ def run_experiment(generator, config):
     #####################################################################
     ############################## Testing ##############################
     #####################################################################
+
+    if test_on_unrelated_questions:
+        static_encoding = 0 # Set to false in order to get more samples for the testing phase
+        multi_token_intervention = 1 # Set to true in order to get more samples for the testing phase
+
 
     if test_model:
         generator.model.current_split = "test"
@@ -1546,7 +1555,7 @@ def run_experiment(generator, config):
         if testing_verbose:
             plt.show()
         if log_wandb:
-            wandb.log({f"problem_type_similarity_histogram_per_problem_type": wandb.Image(plt)})  # Log to wandb
+            wandb.log({f"problem_type_similarity_histogram_per_problem_type": wandb.Image(plt)})
         plt.close()
 
         bins = 100
@@ -1564,7 +1573,7 @@ def run_experiment(generator, config):
         if testing_verbose:
             plt.show()
         if log_wandb:
-            wandb.log({f"problem_type_similarity_histogram": wandb.Image(plt)})  # Log to wandb
+            wandb.log({f"problem_type_similarity_histogram": wandb.Image(plt)})
         plt.close()
 
         if df[df.actual_problem_type.isin(untrained_pts)].shape[0]:
@@ -1584,13 +1593,42 @@ def run_experiment(generator, config):
             .reset_index(drop=True)
         )
 
-        if testing_verbose:
-            print("Number of trained problems with different actual problem types and maximum score identified problem types:", 
-                  sum(result['actual_problem_type'] != result['predicted_problem_type']))
+        print("Number of trained problems with different actual problem types and maximum score identified problem types:", 
+                sum(result['actual_problem_type'] != result['predicted_problem_type']))
         if log_wandb:
             wandb.log({"different_actual_problem_types_count": sum(result['actual_problem_type'] != result['predicted_problem_type'])})
 
+        train_problem_scores = df[df.actual_problem_type.isin(generator.model.training_problems)].pivot_table(
+            index="training_item", values="score", aggfunc=np.max)
+        test_problem_scores = df[~df.actual_problem_type.isin(generator.model.training_problems)].pivot_table(
+            index="training_item", values="score", aggfunc=np.max)
 
+        min_dataset_size = max(len(train_problem_scores), len(test_problem_scores)) * 1
+
+        plt.hist(test_problem_scores.sample(min_dataset_size, replace=True).score, bins=bins, histtype="step")
+        plt.hist(train_problem_scores.sample(min_dataset_size, replace=True).score, bins=bins, histtype="step")
+        plt.xlabel("Dot product similarity")
+        plt.ylabel("Number of Samples")
+        plt.legend([ "Problems not seen during training", "Problems seen during training"])
+        if log_wandb:
+            wandb.log({f"training_vs_testing_pt_similarity": wandb.Image(plt)})
+        if testing_verbose:
+            plt.show()
+        plt.close()
+
+        leg = []
+        for pt in sorted(set(df.actual_problem_type)):
+            plt.hist(df[df.actual_problem_type.isin([pt])].  pivot_table(
+                index="training_item", values="score", aggfunc=np.max).score, bins=bins, histtype="step")
+            leg += [pt]
+        plt.xlabel("Dot product similarity")
+        plt.ylabel("Number of Samples")
+        plt.legend(leg)
+        if log_wandb:
+            wandb.log({f"training_vs_testing_seperated_pt_similarity": wandb.Image(plt)})
+        if testing_verbose:
+            plt.show()
+        plt.close()
 
 
 def initialize_default_config():
@@ -1608,6 +1646,7 @@ def initialize_default_config():
     validate_model           = True  # If false, then do the validation step
     test_model               = True  # IF false, then do the training step
     lora_baseline            = False # If True,  instead of running symbolic encoder-decoder architecture, run a lora module
+    initialize_lora          = False # If True,  instead of randomly initializing the LoRA networks, use the pretrained encoder and decoder networks as a starting point
     starting_skip_strength   = 0.5   # The starting strength of skip connections (0 is all symbolic, 1 is all LLM)
     problem_score_threshold  = 0.8   # If the similarity between the problem type is less than this value, don't us symbolic model
     normalize_VSA_before_dot = False # If true, normalize VSA (from encoder) before doing a dot product with different problem types
@@ -1683,6 +1722,7 @@ def initialize_default_config():
         'validate_model'                      : validate_model,
         'test_model'                          : test_model,
         'lora_baseline'                       : lora_baseline,
+        'initialize_lora'                     : initialize_lora,
         'starting_skip_strength'              : starting_skip_strength,
         'problem_score_threshold'             : problem_score_threshold,
         'normalize_VSA_before_dot'            : normalize_VSA_before_dot,

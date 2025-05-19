@@ -34,6 +34,14 @@ from llama import Dialog
 from llama.generation import sample_top_p
 
 
+def append_dialog_batch_to_file(dialog_batch, filepath):
+    """Append each dialog in the batch (a list of list of dicts) to a JSONL file."""
+    with open(filepath, 'a', encoding='utf-8') as f:
+        for dialog in dialog_batch:
+            json.dump(dialog, f)
+            f.write('\n')
+
+
 class EncoderDataset(Dataset):
     def __init__(self, data, labels, transform=None):
         self.data = data
@@ -1121,10 +1129,13 @@ def generate_and_save_data(generator, SE, save_dir, rounds, mode, save_frequency
 
             correct_vsas = SE.generate_VSA(torch.tensor(dialog_data[1]), torch.tensor(dialog_data[2]), dialog_data[3]).type(torch.bfloat16)
 
+            append_dialog_batch_to_file(dialog_data[0], "dialog_data_log_pregen.jsonl")
             h_stack, _ = gather_h_stacks(generator, SE, dialog_data, produce_correct_VSA=False)
         else:
             # Generate dialog data and gather 'h_stack' and 'correct_sps'
             dialog_data = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type)
+            append_dialog_batch_to_file(dialog_data[0], "dialog_data_log_random.jsonl")
+
             h_stack, correct_vsas = gather_h_stacks(generator, SE, dialog_data, produce_correct_VSA=True)
 
         # shape of h_stack is n_layers, batch, num_tokens, hiddem_dim.
@@ -1146,7 +1157,7 @@ def generate_and_save_data(generator, SE, save_dir, rounds, mode, save_frequency
 
 
 def generate_data_loaders(mode, save_dir, data_rounds, save_frequency, layer_numbers, n_samples=1, df_subset=None,
-                          restrict_dataset=None, tokens_to_keep=1, batch_size=512, verbose=False):
+                          restrict_dataset=None, tokens_to_keep=1, batch_size=512, gpu_seed=False, verbose=False):
     if mode == "train":
         h_path  = 'h_stack_round_'
         sp_path = 'correct_sps_round_'
@@ -1170,7 +1181,7 @@ def generate_data_loaders(mode, save_dir, data_rounds, save_frequency, layer_num
         correct_sps_data = []
 
         # Load each round's data from disk
-        if restrict_dataset: # If restrict_dataset is not set to None, then reduce the amount of runs loaded to restrict_dataset
+        if restrict_dataset: # If restrict_dataset is not set to None or 0, then reduce the amount of runs loaded to restrict_dataset
             runs = restrict_dataset
         else:
             runs = data_rounds
@@ -1202,7 +1213,8 @@ def generate_data_loaders(mode, save_dir, data_rounds, save_frequency, layer_num
         # Create `EncoderDataset` and `DataLoader` for the current layer
         encoder_training_data = EncoderDataset(h_layer_stacked.cuda(), numbers_stacked.cuda())
         gpu_generator = torch.Generator(device='cuda')
-        #gpu_generator.manual_seed(42)
+        if gpu_seed:
+            gpu_generator.manual_seed(42)
 
         encoder_data_loader = DataLoader(
             encoder_training_data,

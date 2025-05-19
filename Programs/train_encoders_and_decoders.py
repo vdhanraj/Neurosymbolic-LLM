@@ -64,6 +64,7 @@ parser.add_argument("--chpt_dir", type=str, default=config_defaults.get("chpt_di
 parser.add_argument("--tokenizer_path", type=str, default=config_defaults.get("tokenizer_path"), help="Path to tokenizer.model file")
 parser.add_argument("--generate_data", type=int, default=config_defaults.get("generate_data"), help="Whether to generate training data")
 parser.add_argument("--log_wandb", type=int, default=config_defaults.get("log_wandb"), help="Whether to log outputs to wandb")
+parser.add_argument("--gpu_seed", type=int, default=config_defaults.get("gpu_seed"), help="Whether or not to use a gpu seed for dataloaders")
 
 # === Model config ===
 parser.add_argument("--max_seq_len", type=int, default=config_defaults.get("max_seq_len"), help="Max sequence length for LLM")
@@ -113,6 +114,8 @@ parser.add_argument("--training_data_df_path", type=str, default=config_defaults
 parser.add_argument("--val_data_df_path", type=str, default=config_defaults.get("val_data_df_path"), help="Path to pre-generated validation dataset (leave as '' to run based on randomly sampled data)")
 parser.add_argument("--testing_data_df_path", type=str, default=config_defaults.get("testing_data_df_path"), help="Path to pre-generated testing dataset (leave as '' to run based on randomly sampled data)")
 
+
+
 args = parser.parse_args(remaining_argv)
 
 # --- Step 5: Expand and assign ---
@@ -122,6 +125,7 @@ ckpt_dir       = str(Path(args.chpt_dir).expanduser())
 tokenizer_path = str(Path(args.tokenizer_path).expanduser())
 generate_data  = args.generate_data
 log_wandb      = args.log_wandb
+gpu_seed       = args.gpu_seed
 
 # Model + sampling
 max_seq_len         = args.max_seq_len
@@ -246,7 +250,7 @@ else:
     problem_str = problem_type
 
 if training_data_df_path:
-    print("training_data_df_path:",training_data_df_path)
+    print("training_data_df_path:", training_data_df_path)
     df_train = pd.read_csv(training_data_df_path)
     train_data_rounds = len(df_train) // n_samples
     print("Set number of training rounds to:", train_data_rounds)
@@ -315,17 +319,17 @@ if generate_data:
 if not generate_data:
     training_encoder_data_loaders = generate_data_loaders(mode='train', save_dir=save_dir, data_rounds=train_data_rounds, n_samples=n_samples, df_subset=df_train,
                                                           save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=restrict_train_dataset, 
-                                                          tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, verbose=True)
+                                                          tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, gpu_seed=gpu_seed, verbose=True)
     print("Training data loaders for each layer have been created.")
 
     validation_encoder_data_loaders = generate_data_loaders(mode='val', save_dir=save_dir, data_rounds=val_data_rounds, n_samples=n_samples, df_subset=df_val,
                                                             save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=restrict_val_dataset, 
-                                                            tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, verbose=True)
+                                                            tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, gpu_seed=gpu_seed, verbose=True)
     print("Validation data loaders for each layer have been created.")
 
     testing_encoder_data_loaders = generate_data_loaders(mode='test', save_dir=save_dir, data_rounds=test_data_rounds, n_samples=n_samples, df_subset=df_test,
                                                          save_frequency=save_frequency, layer_numbers=layer_numbers, restrict_dataset=restrict_test_dataset, 
-                                                         tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, verbose=True)
+                                                         tokens_to_keep=tokens_to_keep, batch_size=encoder_decoder_batch_size, gpu_seed=gpu_seed, verbose=True)
     print("Testing data loaders for each layer have been created.")
 
     encoders = torch.nn.ModuleList()
@@ -582,7 +586,7 @@ if not generate_data:
 
     ####################################################################################################
     
-    print("Running Error Statistics for Testing Data")
+    print(" ------ Running Error Statistics for Testing Data ------ ")
 
     #errors_per_pt = {layer_num.item() : {pt: [] for pt in possible_problems} for n, layer_num in enumerate(layer_numbers)}
     errors_per_pt = {pt: {layer_num.item(): [] for n, layer_num in enumerate(layer_numbers)} for pt in possible_problems}
@@ -656,6 +660,7 @@ if not generate_data:
     plt.grid(False)
     if log_wandb:
         wandb.log({f"Error of Decoded Numbers (Testing Data)": wandb.Image(plt)})
+        wandb.log({f"Error Matrix (Testing Data)": errors})
     else:
         plt.show()
     plt.close()
@@ -673,20 +678,23 @@ if not generate_data:
     plt.grid(False)
     if log_wandb:
         wandb.log({f"Error of Decoded Numbers per Problem Type (Testing Data)": wandb.Image(plt)})
+        wandb.log({f"Error per Problem Type (Testing Data)": errors_per_pt})
     else:
         plt.show()
     plt.close()
 
+
+
     labels = ['Ones Digit Error Rate',
-            'Tens Digit Error Rate',
-            'Hundreds Digit Error Rate',
-            'Thousands Digit Error Rate',
-            'Ten Thousands Digit Error Rate',
-            'Hundred Thousands Digit Error Rate',
-            'Millions Digit Error Rate',
-            'Ten Millions Digit Error Rate',
-            'Hundred Millions Digit Error Rate',
-            ]
+              'Tens Digit Error Rate',
+              'Hundreds Digit Error Rate',
+              'Thousands Digit Error Rate',
+              'Ten Thousands Digit Error Rate',
+              'Hundred Thousands Digit Error Rate',
+              'Millions Digit Error Rate',
+              'Ten Millions Digit Error Rate',
+              'Hundred Millions Digit Error Rate',
+              ]
     markers = ["o", "s", "^", 
                ".", "v", "*", 
                "<", ">", "1"]
@@ -701,6 +709,7 @@ if not generate_data:
     plt.grid(True)
     if log_wandb:
         wandb.log({f"Error of Decoded Numbers per Digit (Testing Data)": wandb.Image(plt)})
+        wandb.log({f"Error per Digit (Testing Data)": per_digit_errors.float().cpu().numpy().T})
     else:
         plt.show()
     plt.close()
@@ -709,7 +718,7 @@ if not generate_data:
 
     ####################################################################################################
     
-    print("Running Error Statistics for Training Data")
+    print(" ------ Running Error Statistics for Training Data ------ ")
 
     errors_per_pt = {pt: {layer_num.item(): [] for n, layer_num in enumerate(layer_numbers)} for pt in possible_problems}
 
@@ -782,6 +791,7 @@ if not generate_data:
     plt.grid(False)
     if log_wandb:
         wandb.log({f"Error of Decoded Numbers (Training Data)": wandb.Image(plt)})
+        wandb.log({f"Error Matrix (Training Data)": errors})
     else:
         plt.show()
     plt.close()
@@ -799,6 +809,7 @@ if not generate_data:
     plt.grid(False)
     if log_wandb:
         wandb.log({f"Error of Decoded Numbers per Problem Type (Training Data)": wandb.Image(plt)})
+        wandb.log({f"Error per Problem Type (Training Data)": errors_per_pt})
     else:
         plt.show()
     plt.close()
@@ -827,6 +838,7 @@ if not generate_data:
     plt.grid(True)
     if log_wandb:
         wandb.log({f"Error of Decoded Numbers per Digit (Training Data)": wandb.Image(plt)})
+        wandb.log({f"Error per Digit (Training Data)": per_digit_errors.float().cpu().numpy().T})
     else:
         plt.show()
     plt.close()

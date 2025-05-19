@@ -361,7 +361,6 @@ class Transformer(nn.Module):
                 if self.lora_baseline:
                     final_symbol = symbolic_encoding
                     use_symbolic_layer = torch.tensor([True for _ in range(_bsz)], device=h.device).view(-1, 1)
-                    print("Using LoRA")
                 else:
                     if not self.static_encoding or curr_token == 0: # Execute if the curr_token is 0, or if static_encoding is set to False (in which case you recalculate final_symbol during each forward pass)
                         problem_type_identity = {"addition": lambda x: 0, "multiplication": lambda x: 1,   "modulo":      lambda x: x+1, "gcd":         lambda x: x, 
@@ -631,10 +630,15 @@ class Transformer(nn.Module):
                     # Concatenate the modified token of the LLM (the most recent token) with the rest of the tokens
                     h = torch.cat([h[:, :-1, :], torch.where(use_symbolic_layer, modified_h * (1 - self.skip_weights[skip_index]) + h[:, -1, :] * self.skip_weights[skip_index], h[:, -1, :]).unsqueeze(1)], dim=1)
                 else:
-                    #h = torch.cat([h[:, :-1, :], (modified_h + h[:, -1, :]).unsqueeze(1)], dim=1)
-                    h = torch.cat([h[:, :-1, :], torch.where(use_symbolic_layer, modified_h + h[:, -1, :], h[:, -1, :]).unsqueeze(1)], dim=1)
-                    
-                    h = self.rms_layers[skip_index](h)
+                    h = torch.cat([h[:, :-1, :], torch.where(use_symbolic_layer,modified_h + h[:, -1, :], h[:, -1, :]).unsqueeze(1)], dim=1)
+
+                    # Selective application of RMS layer
+                    h_out = h.clone()
+                    symbolic_indices = use_symbolic_layer.view(-1).nonzero(as_tuple=True)[0]
+                    if symbolic_indices.numel() > 0:
+                        h_out[symbolic_indices] = self.rms_layers[skip_index](h[symbolic_indices])
+                    h = h_out
+
                 skip_index = skip_index + 1
 
             h = layer(h, start_pos, freqs_cis, mask)
