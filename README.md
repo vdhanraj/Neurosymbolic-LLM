@@ -123,3 +123,8 @@ All runs are logged to [Weights & Biases](https://wandb.ai) by default.
 To disable W&B logging, pass `--log_wandb False`.
 
 ---
+
+
+## License
+
+This project is licensed under the GNU General Public License v3.0. See the [LICENSE](./LICENSE) file for details.
