@@ -39,6 +39,17 @@ from fairscale.nn.model_parallel.initialize import (
 # Parser
 curr_date = datetime.datetime.now().strftime("%Y%m%d")
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
+
 pre_parser = argparse.ArgumentParser(description="Config Loader", add_help=False)
 pre_parser.add_argument("--config", type=str, default="train_encoders_and_decoders_default_config.yaml", help="Path to YAML configuration file")
 pre_parser.add_argument("--master_port", type=int, default=29500, help="Port for distributed init (must be unique per job)")
@@ -62,8 +73,8 @@ parser.add_argument("--curr_dir", type=str, default=config_defaults.get("curr_di
 parser.add_argument("--git_dir", type=str, default=config_defaults.get("git_dir"), help="Path to project Git root")
 parser.add_argument("--chpt_dir", type=str, default=config_defaults.get("chpt_dir"), help="Path to LLM checkpoint directory")
 parser.add_argument("--tokenizer_path", type=str, default=config_defaults.get("tokenizer_path"), help="Path to tokenizer.model file")
-parser.add_argument("--generate_data", type=int, default=config_defaults.get("generate_data"), help="Whether to generate training data")
-parser.add_argument("--log_wandb", type=int, default=config_defaults.get("log_wandb"), help="Whether to log outputs to wandb")
+parser.add_argument("--generate_data", type=str2bool, default=config_defaults.get("generate_data"), help="Whether to generate training data")
+parser.add_argument("--log_wandb", type=str2bool, default=config_defaults.get("log_wandb"), help="Whether to log outputs to wandb")
 parser.add_argument("--gpu_seed", type=int, default=config_defaults.get("gpu_seed"), help="Whether or not to use a gpu seed for dataloaders")
 
 # === Model config ===
@@ -97,7 +108,7 @@ parser.add_argument("--problem_type", nargs="+", type=str, default=config_defaul
 
 # === Token handling ===
 parser.add_argument("--tokens_to_keep", type=str, default=config_defaults.get("tokens_to_keep"), help="How many tokens to keep (or 'all')")
-parser.add_argument("--calculate_end_index", type=int, default=config_defaults.get("calculate_end_index"), help="Whether to cut tokens at the end of the prompt")
+parser.add_argument("--calculate_end_index", type=str2bool, default=config_defaults.get("calculate_end_index"), help="Whether to cut tokens at the end of the prompt")
 
 # === Encoder/Decoder training ===
 parser.add_argument("--encoder_decoder_batch_size", type=int, default=config_defaults.get("encoder_decoder_batch_size"), help="Training batch size")

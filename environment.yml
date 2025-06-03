@@ -1,4 +1,4 @@
-name: torch
+name: ns_llm
 channels:
   - defaults
 dependencies:

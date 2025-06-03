@@ -34,14 +34,6 @@ from llama import Dialog
 from llama.generation import sample_top_p
 
 
-def append_dialog_batch_to_file(dialog_batch, filepath):
-    """Append each dialog in the batch (a list of list of dicts) to a JSONL file."""
-    with open(filepath, 'a', encoding='utf-8') as f:
-        for dialog in dialog_batch:
-            json.dump(dialog, f)
-            f.write('\n')
-
-
 class EncoderDataset(Dataset):
     def __init__(self, data, labels, transform=None):
         self.data = data
@@ -776,12 +768,10 @@ def generate_and_save_data(generator, SE, save_dir, rounds, mode, save_frequency
 
             correct_vsas = SE.generate_VSA(torch.tensor(dialog_data[1]), torch.tensor(dialog_data[2]), dialog_data[3]).type(torch.bfloat16)
 
-            append_dialog_batch_to_file(dialog_data[0], "dialog_data_log_pregen.jsonl")
             h_stack, _ = gather_h_stacks(generator, SE, dialog_data, produce_correct_VSA=False)
         else:
             # Generate dialog data and gather 'h_stack' and 'correct_sps'
             dialog_data = generate_dialog(complexity=complexity, samples=n_samples, problem_type=problem_type)
-            append_dialog_batch_to_file(dialog_data[0], "dialog_data_log_random.jsonl")
 
             h_stack, correct_vsas = gather_h_stacks(generator, SE, dialog_data, produce_correct_VSA=True)
 

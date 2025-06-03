@@ -114,7 +114,7 @@ parser.add_argument("--single_number_generation",  type=str2bool,  default=confi
 parser.add_argument("--use_specific_identities",   type=str2bool,  default=config_defaults.get("use_specific_identities"), required=False)
 parser.add_argument("--trainable_skip",            type=str2bool,  default=config_defaults.get("trainable_skip"), required=False)
 parser.add_argument("--symbolic_encoding_layer",   type=int,   default=config_defaults.get("symbolic_encoding_layer"), required=False)
-parser.add_argument("--symbolic_decoding_layers",  nargs="+",  type=int, default=json.dumps(config_defaults.get("symbolic_decoding_layers")), required=False)
+parser.add_argument("--symbolic_decoding_layers",  nargs="+",  type=int, default=config_defaults.get("symbolic_decoding_layers"), required=False)
 
 # === Optimization ===
 parser.add_argument("--num_epochs",                      type=int,        default=config_defaults.get("num_epochs"), required=False)

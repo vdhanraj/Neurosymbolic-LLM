@@ -32,7 +32,7 @@ symbolic_decoding_layers: [17]
 
 num_epochs: 1
 num_steps: 1000
-n_samples: 2
+n_samples: 1
 inference_to_backprop_ratio: 8
 learning_rate: 0.001
 learning_rate_reduction_factors:
