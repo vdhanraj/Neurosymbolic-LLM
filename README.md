@@ -131,6 +131,9 @@ To disable W&B logging, pass `--log_wandb False`.
 
 ---
 
+## Huggingface Model Weights
+
+The model weights needed to reproduce the paper results can be found at [https://huggingface.co/vdhanraj/neurosymbolic-llm](https://huggingface.co/vdhanraj/neurosymbolic-llm). 
 
 ## License
 
