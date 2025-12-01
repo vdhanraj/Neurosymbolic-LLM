@@ -3,7 +3,7 @@
 ![Model Diagram](drawio_diagram.png)
 
 
-This repository implements the method described in the following paper:  [https://www.arxiv.org/pdf/2502.01657](https://www.arxiv.org/pdf/2502.01657)
+This repository implements the method described in the following paper:  [https://aclanthology.org/2025.emnlp-main.1556](https://aclanthology.org/2025.emnlp-main.1556)
 
 ## Setup
 
@@ -144,3 +144,22 @@ The model weights needed to reproduce the paper results can be found at [https:/
 ## License
 
 This project is licensed under the GNU General Public License v3.0. See the [LICENSE](./LICENSE) file for details.
+
+## Citation
+
+If you use this code or build on this work, please cite:
+
+```bibtex
+@inproceedings{dhanraj-eliasmith-2025-improving,
+  author    = {Varun Dhanraj and Chris Eliasmith},
+  title     = {Improving Rule-based Reasoning in {LLM}s using Neurosymbolic Representations},
+  booktitle = {Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing},
+  year      = {2025},
+  month     = {November},
+  address   = {Suzhou, China},
+  publisher = {Association for Computational Linguistics},
+  pages     = {30577--30596},
+  url       = {https://aclanthology.org/2025.emnlp-main.1556},
+  doi       = {10.18653/v1/2025.emnlp-main.1556}
+}
+```
